@@ -80,14 +80,18 @@ test("local API: security, persistence, confirmation, import, DOCX, backup and r
     process.execPath,
     ["--import", "./tests/provider-hook.js", "server/index.js"],
     {
-      env: { ...process.env, CVOS_DATA_DIR: dir, PORT: "3219" },
+      env: { ...process.env, CVOS_DATA_DIR: dir, PORT: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  let output = "";
-  child.stdout.on("data", (d) => (output += d));
+  let output = "",
+    base = "";
+  child.stdout.on("data", (d) => {
+    output += d;
+    const match = output.match(/CVOS http:\/\/127\.0\.0\.1:(\d+)/);
+    if (match) base = "http://127.0.0.1:" + match[1];
+  });
   child.stderr.on("data", (d) => (output += d));
-  const base = "http://127.0.0.1:3219";
   let token;
   async function request(route, body, method, extra = {}) {
     const r = await fetch(base + route, {
@@ -103,8 +107,9 @@ test("local API: security, persistence, confirmation, import, DOCX, backup and r
     return { r, data: await r.json() };
   }
   try {
-    for (let i = 0; i < 80; i++) {
+    for (let i = 0; i < 300; i++) {
       try {
+        if (!base) throw new Error("starting");
         const r = await fetch(base + "/api/session");
         if (r.ok) {
           token = (await r.json()).token;
@@ -279,10 +284,33 @@ test("local API: security, persistence, confirmation, import, DOCX, backup and r
         "PUT",
       )
     ).data;
+    const rawJD =
+      "首页\n公司：Example Co\n岗位名称：Example Role\n工作地点：上海\n薪资：10-15K\n任职要求\n熟悉 SQL\n立即投递";
+    const parsedJD = await request("/api/jd/parse", { raw: rawJD, mode: "ai" });
+    assert.equal(parsedJD.r.status, 200, JSON.stringify(parsedJD.data));
+    assert.equal(parsedJD.data.company, "Example Co");
+    assert.equal(parsedJD.data.location, "上海");
+    assert.ok(!parsedJD.data.jd.includes("立即投递"));
+    assert.equal(
+      (
+        await request("/api/jd/parse", {
+          raw: rawJD + "\nPROVIDER_INVENT",
+          mode: "ai",
+        })
+      ).r.status,
+      500,
+    );
+    d.state.jobs[0].title = "REJECT_UNKNOWN_ID";
+    d = (await request("/api/state", d, "PUT")).data;
+    const invalidSelection = await request("/api/ai/resume", { jobId: "job" });
+    assert.equal(invalidSelection.r.status, 500);
+    assert.equal((await request("/api/state")).data.state.resumes.length, 0);
+    d.state.jobs[0].title = "Example Role";
+    d = (await request("/api/state", d, "PUT")).data;
     r = await request("/api/ai/resume", { jobId: "job" });
     assert.equal(r.r.status, 200, JSON.stringify(r.data));
     d = r.data;
-    assert.ok(d.state.resumes[0].content.includes("Verified synthetic fact"));
+    assert.ok(d.state.resumes[0].content.includes("Verified skill from mock"));
     assert.equal(d.state.jobs[0].resumeId, r.data.resumeId);
     d.state.resumes = [
       {
@@ -371,7 +399,8 @@ test("local API: security, persistence, confirmation, import, DOCX, backup and r
     );
   } finally {
     child.kill("SIGTERM");
-    await new Promise((resolve) => child.once("exit", resolve));
+    if (child.exitCode === null)
+      await new Promise((resolve) => child.once("exit", resolve));
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

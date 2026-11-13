@@ -1366,3 +1366,157 @@ summary:focus-visible {
     print-color-adjust: exact;
   }
 }
+
+/* Knowledge is the workspace; resumes are derived artifacts. */
+.knowledge-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.75fr) minmax(0, 1.8fr);
+  gap: 22px;
+  margin-bottom: 24px;
+  align-items: start;
+}
+.knowledge-list select {
+  margin-top: 10px;
+}
+.knowledge-rows {
+  max-height: 740px;
+  overflow: auto;
+}
+.knowledge-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  text-align: left;
+  width: 100%;
+  padding: 16px 12px;
+  border-bottom: 1px solid #eceef3;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.knowledge-row b {
+  font-size: 14px;
+}
+.knowledge-row span {
+  color: #8b909a;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.knowledge-row small {
+  color: #8794a8;
+}
+.knowledge-row.selected {
+  background: #eef4fd;
+}
+.knowledge-welcome {
+  padding: 100px 20px;
+  text-align: center;
+}
+.knowledge-welcome h2 {
+  margin-top: 20px;
+  font-size: 24px;
+}
+.knowledge-welcome p {
+  color: #8b909a;
+}
+.knowledge-reading {
+  min-height: 340px;
+  padding: 24px 4px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.knowledge-reading p {
+  margin-bottom: 14px;
+}
+.knowledge-editor details {
+  margin: 16px 0;
+}
+.knowledge-editor summary,
+.identity-details > summary {
+  cursor: pointer;
+  color: #626d80;
+  padding: 10px 0;
+}
+.identity-details .profile-layout {
+  padding-top: 24px;
+}
+.attachments {
+  border-top: 1px solid #e6e9ef;
+  margin: 24px 0;
+  padding-top: 20px;
+}
+.attachment-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+}
+.check-label input,
+.source-select input {
+  width: auto;
+}
+.photo-editor {
+  border-top: 1px solid #e6e9ef;
+  margin-top: 20px;
+  padding-top: 20px;
+}
+.saved-photo {
+  display: block;
+  width: 75px;
+  height: 100px;
+  object-fit: cover;
+  margin: 12px 0;
+}
+.crop-panel {
+  margin: 15px 0;
+  padding: 15px;
+  background: #f7f8fa;
+  border-radius: 10px;
+}
+.crop-panel canvas {
+  width: 150px;
+  height: 200px;
+  display: block;
+  margin: 0 auto 20px;
+}
+.evidence {
+  margin: 20px 0;
+}
+.evidence blockquote {
+  margin: 15px 0;
+  padding: 12px;
+  border-left: 3px solid #98b8e7;
+  background: #f7f9fc;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.actual-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.actual-pages canvas {
+  width: 100%;
+  max-width: 794px;
+  height: auto;
+  box-shadow: 0 2px 16px #18223416;
+  background: white;
+}
+.actual-preview {
+  min-width: 0;
+}
+@media (max-width: 1000px) {
+  .knowledge-layout {
+    grid-template-columns: 1fr;
+  }
+  .knowledge-rows {
+    max-height: 320px;
+  }
+}
+@media (max-width: 640px) {
+  .knowledge-welcome {
+    padding: 40px 0;
+  }
+  .knowledge-layout {
+    gap: 14px;
+  }
+}

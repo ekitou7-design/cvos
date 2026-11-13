@@ -28,19 +28,68 @@ const message = z.object({
   role: z.enum(["user", "assistant"]),
   content: text,
 });
+const photo = z
+  .string()
+  .max(1000000)
+  .refine(
+    (v) => !v || /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(v),
+    "照片必须是裁剪后的 PNG",
+  )
+  .default("");
+const evidence = z
+  .array(z.object({ entryId: short, title: short, text }))
+  .max(500)
+  .default([]);
+export const knowledgeSchema = z.object({
+  id: short.min(1),
+  title: short.min(1),
+  category: short,
+  content: text,
+  tags: z.array(short).max(50),
+  links: z.array(short).max(100),
+  confirmed: z.boolean(),
+  createdAt: short,
+  updatedAt: short,
+  attachments: z
+    .array(
+      z.object({
+        id: short,
+        name: short,
+        base64: z
+          .string()
+          .max(16800000)
+          .regex(/^[A-Za-z0-9+/]*={0,2}$/),
+      }),
+    )
+    .max(30)
+    .default([]),
+});
 const resume = z.object({
   id: short,
   title: short,
   content: text,
   jobId: short.default(""),
   updatedAt: short,
+  photo,
+  evidence,
+  selectionNote: text.default(""),
   versions: z
-    .array(z.object({ id: short, content: text, createdAt: short }))
+    .array(
+      z.object({
+        id: short,
+        content: text,
+        createdAt: short,
+        photo,
+        title: short.optional(),
+        evidence,
+      }),
+    )
     .max(500),
 });
 export const stateSchema = z
   .object({
     profile: profileSchema,
+    knowledge: z.array(knowledgeSchema).max(3000).default([]),
     chats: z
       .array(
         z.object({
@@ -58,6 +107,10 @@ export const stateSchema = z
           company: short,
           title: short,
           jd: text,
+          rawJd: text.default(""),
+          location: short.default(""),
+          salary: short.default(""),
+          requirements: text.default(""),
           url: short,
           status: z.enum(["准备中", "已投递", "面试中", "已录用", "已结束"]),
           notes: text,
@@ -83,9 +136,28 @@ export const stateSchema = z
       )
       .max(500),
   })
-  .strict();
+  .strict()
+  .superRefine((state, ctx) => {
+    if (Buffer.byteLength(JSON.stringify(state)) > 96 * 1024 * 1024)
+      ctx.addIssue({
+        code: "custom",
+        message: "资料库超过 96 MB，请移除大型附件后保存",
+      });
+    for (const key of [
+      "knowledge",
+      "resumes",
+      "jobs",
+      "sources",
+      "chats",
+      "proposals",
+    ]) {
+      if (new Set(state[key].map((x) => x.id)).size !== state[key].length)
+        ctx.addIssue({ code: "custom", message: "条目 ID 重复" });
+    }
+  });
 export const emptyState = () => ({
   profile: emptyProfile(),
+  knowledge: [],
   chats: [],
   resumes: [],
   jobs: [],
@@ -180,4 +252,24 @@ export function resumeBlocks(content) {
             ? "bullet"
             : "text",
     }));
+}
+
+export function assertTextIntegrity(content, extracted) {
+  const count = (value) => {
+    const result = new Map();
+    for (const char of value.normalize("NFKC").match(/[\u3400-\u9fff]/gu) || [])
+      result.set(char, (result.get(char) || 0) + 1);
+    return result;
+  };
+  const expected = count(content),
+    actual = count(extracted);
+  for (const [char, amount] of expected) {
+    if ((actual.get(char) || 0) < amount)
+      throw Object.assign(
+        new Error(
+          "排版结果存在中文缺字，已阻止导出。请安装 Noto Sans CJK SC 中文字体后重启 CVOS。原正文已保留。",
+        ),
+        { status: 503 },
+      );
+  }
 }

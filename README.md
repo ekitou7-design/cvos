@@ -1,14 +1,12 @@
 # CVOS
 
-**Your career, your story.** 开源、本地优先的 AI 求职管理工作空间。
+**Your knowledge, your career.** 开源、本地优先的 AI 求职管理平台。个人知识库是核心，简历是根据岗位从真实知识中生成的产物。
 
-用对话和文档整理真实经历，建立个人资料库，为不同岗位准备简历。界面采用克制的桌面应用风格，默认不创建账户，也不托管你的个人资料。
-
-> 当前版本：0.1.0，早期可用版本。AI 生成内容需要本人核对。CVOS 不会自动投递职位。
+当前版本 **v0.2.0**，MIT License。没有云端账户、遥测或自动投递；代码、私人资料和模型凭证分开存储。
 
 ## 快速开始
 
-需要 **Node.js 24.14 或更新的 24.x 版本**、npm、Git。支持运行这些工具的 macOS、Windows 和 Linux；本项目当前在 Apple Silicon macOS 上验证。无需 Docker 或数据库服务。
+需要 **Node.js 24.14+（24.x）**、npm、Git，以及用于实际排版的 **LibreOffice 和 Noto Sans CJK SC 中文字体**。支持 macOS、Windows、Linux；本版本在 Apple Silicon macOS 验证，Linux 由 CI 验证。
 
 ```sh
 git clone https://github.com/ekitou7-design/cvos.git
@@ -18,85 +16,105 @@ npm run build
 npm start
 ```
 
-打开 http://127.0.0.1:3210 。停止服务：终端按 `Ctrl+C`。
+打开 http://127.0.0.1:3210 。停止服务：终端按 `Ctrl+C`。macOS 也可双击 `scripts/start.command`。
 
-macOS 安装后也可双击 `scripts/start.command`，会构建、启动并打开浏览器。
+中文字体可从 [Noto CJK 官方发行页](https://github.com/notofonts/noto-cjk/releases)安装（选择简体中文 Sans 字体）。macOS 可执行 `brew install --cask font-noto-sans-cjk-sc`；Ubuntu 可执行 `sudo apt-get install libreoffice-writer fonts-noto-cjk`。排版时会核对中文文字是否完整，缺字则拒绝导出并提示修复。
 
-代码目录外的 `../private-data/` 会自动创建。**个人数据库与密钥永远不能放在代码仓库中。** 如果在外置硬盘使用，请先连接硬盘，在该硬盘上克隆仓库，再运行上述命令。不要在服务运行时拔出硬盘。
-
-自定义数据目录（必须与代码目录隔离）：
+安装 [LibreOffice](https://www.libreoffice.org/download/download-libreoffice/) 后，默认查找 macOS `/Applications/LibreOffice.app`、Windows `C:\Program Files\LibreOffice` 或 PATH 中的 `soffice`。也支持放在仓库相邻 `../runtime/LibreOffice.app` 中的 macOS 便携安装。自定义路径：
 
 ```sh
-# macOS / Linux，路径仅为示例
+CVOS_SOFFICE="/absolute/path/to/soffice" npm start
+```
+
+```powershell
+$env:CVOS_SOFFICE = "D:\Apps\LibreOffice\program\soffice.exe"
+npm start
+```
+
+没有排版引擎时，知识管理、导入、聊天、岗位编辑、简历手动编辑、版本与备份仍可使用；生成、实际 A4 预览、单页精简和导出会明确提示安装引擎，不会冒充成功。
+
+## 私人数据与升级
+
+默认数据在仓库外相邻的 `../private-data/`，含 SQLite 数据库、加密模型配置及独立密钥。不得将其移入代码仓库或提交 GitHub。自定义数据目录必须与仓库隔离：
+
+```sh
 CVOS_DATA_DIR="/absolute/private/path/cvos-data" npm start
 ```
 
 ```powershell
-# Windows PowerShell
 $env:CVOS_DATA_DIR = "D:\CVOS\private-data"
 npm start
 ```
 
-自定义端口：设置 `PORT=3211`。仅监听 `127.0.0.1`，不适合直接暴露到公网或多用户服务器。
+自定义端口：`PORT=3211`。仅监听 `127.0.0.1`；不适合直接暴露到公网或多人使用。使用外置硬盘时，先连接硬盘，再启动；停止服务后才能断开。
 
-## 工作流程
+从 v0.1.0 升级：先停止旧服务，更新代码、安装依赖并重新构建，然后启动。首次启动会在私人目录 `backups/before-v020-*.json` 保存**完整旧资料副本**，再将旧教育、实习、项目、技能、笔记迁移为独立知识条目。旧表单原值、聊天、文档、岗位、简历及版本全部保留；自由笔记默认是未确认草稿。密钥和模型配置不迁移、不重置。每次保存仍有版本冲突保护，防止多个窗口互相覆盖。
 
-1. **个人资料库**：手动编辑基本信息、教育、实习、项目、技能和自由笔记；点击保存写入本地数据库。
-2. **导入材料**：导入 DOCX、文字 PDF、TXT、Markdown、JSON 作为参考文档。导入不自动更新正式资料。扫描 PDF 需要先 OCR，单文件最大 12 MB，PDF 最多 150 页。
-3. **AI 对话**：在设置中配置云端模型。选择本次参考资料，发送对话，或从文档提取资料建议。AI 建议显示原值和新值，经你确认后才写入。资料已变动时，旧建议会阻止覆盖。
-4. **JD 定制**：粘贴 JD，保存公司、岗位、链接、进度与备注。生成时发送已确认资料和该岗位 JD，结果保存到简历库，资料缺口单独提示。
-5. **简历库**：手动编辑正文，实时 A4 分页预览；每次保存建立版本。可载入历史内容并保存为新版本。
-6. **导出**：Word 下载 `.docx`；PDF 使用浏览器打印 → 另存为 PDF，选择 A4、100% 缩放、关闭浏览器页眉页脚。Word 与网页使用不同排版引擎，分页可能有差异。
-7. **投递管理**：在 JD 定制记录准备中、已投递、面试中、已录用、已结束及备注。没有招聘网站自动投递或状态同步。
+## 从知识到简历
 
-## 模型设置
+1. **个人知识库**：自由记录项目、经历、技能、成果与笔记。支持 Markdown 编辑、阅读视图、自定义分类、标签、全文搜索、附件文件名搜索、显式关联、`[[知识标题]]` 跳转与反向链接。不要求按简历表单填写。仅勾选“我确认正文中的事实，可用于简历”的条目参与定制。
+2. **基本信息与材料**：知识库下方可编辑姓名、方向、电话、邮箱和城市；保留 PDF、DOCX、TXT、MD、JSON 导入与 AI 建议审核。导入只存参考文字，不会自动覆盖真实知识。扫描 PDF 需先 OCR。文档最大 12 MB、文字最多 20 万字符、PDF 最多 150 页。
+3. **整页 JD**：直接粘贴招聘网站复制的原始页面。选择无需模型的“本地整理”，或“AI 智能识别”；提取公司、岗位、地点、薪资、正文、要求和链接。原文始终保留，结果可逐项修改后保存。AI 字段必须能在原文中找到依据，不能补造公司或薪资。本地规则适合有字段标签的文本，复杂页面建议 AI 识别并人工检查。
+4. **定制单页**：本地生成按 JD 关键词排序；AI 定制由模型选择、排序事实片段，正文由程序逐字取自已确认知识。长段落在完整句子边界拆分。未知技能与缺失要求独立提示，不写成已具备能力。为防止模型改造数字或成果，v0.2.0 的 AI 不自由改写事实句子；需要调整措辞时可在编辑器自行修改。
+5. **简历与照片**：Markdown 正文可自由编辑；PNG、JPEG、WebP 照片可上传、缩放、调整水平/垂直裁剪位置、替换和删除。照片在本机裁为 3:4 PNG，不上传给模型。每次保存建立新版本，正文、照片、标题和生成依据一并存储；历史版本可载入并另存。
+6. **实际 A4 预览**：右侧显示由本地 Word 排版引擎转换的真实 PDF 页面，包含照片。编辑后自动重新校验。生成时优先选择、精简完整事实，在 11 pt 正文下一页内排版；手动编辑后的校验最多调到 10.5 pt，不使用过小字体、截图正文、隐藏溢出或裁切内容。
+7. **精简与导出**：添加照片或编辑后超页，可点击“按岗位精简到一页”。原正文先存成历史版本，精简只省略完整片段，并显示省略清单，供你审核后保存。Word 和 PDF 下载共用同一份 DOCX 排版结果；只有真实转换结果为一页 A4 才允许下载。过长而无法保留完整片段时会说明原因，要求拆分或手动精简。
+8. **投递管理**：保存岗位、进度、备注与关联简历；支持准备中、已投递、面试中、已录用、已结束。不自动投递或同步招聘网站状态。
 
-支持多个可切换配置，每个配置独立填写名称、协议、API Base URL、模型 ID 与 API Key。请填写你在服务商账户中可用的准确模型 ID。
+所有生成简历保留所选原文的快照，即使知识条目后来修改或删除，也可查看生成时的依据。手动编辑后的新增内容需要本人核对。
 
-- **OpenAI 兼容协议**：Base URL 一般以 `/v1` 结尾，不含 `/chat/completions`；可接入提供该接口的服务商。Gemini 兼容入口可参考其[官方说明](https://ai.google.dev/gemini-api/docs/openai)。不同服务商兼容程度不同。
-- **Anthropic Messages**：Base URL 填写 `https://api.anthropic.com/v1`，不含 `/messages`。
-- 仅支持 HTTPS，禁止接口重定向。保存后可测试连接；测试会产生一次服务商请求，可能计费。
-- 没有 API Key 时，本地编辑、导入、简历新建、版本、导出与备份照常使用，AI 操作会提示配置。
+## 附件与容量
 
-API Key 使用本机独立文件中的密钥做 AES-256-GCM 加密，接口不返回已保存明文。密钥文件与数据库均在私人目录；这不抵抗能读取整个硬盘的攻击者。建议启用磁盘加密。
+知识条目可保存、下载和移除原始附件。单附件最多 **12 MB**；知识、历史版本、照片和附件合计最多 **96 MB**（按存储后的 JSON 大小计，附件使用 Base64，约增加三分之一体积）。这是当前单机快照存储的明确上限，超过时拒绝保存并保留编辑内容。附件包含在 JSON 备份中，不自动读取、执行、OCR 或发送给模型。大量大文件建议保留在独立文件夹，在条目正文记录位置。
 
-**本地优先不等于离线 AI**：只有点击 AI 操作才会向所配置的服务商发送消息和所选资料。聊天是否附带个人资料可选择；提取资料建议会发送当前资料与所选材料；JD 生成会发送当前资料和该 JD。没有遥测、云端账户或自动上传 GitHub。
+## 模型设置与隐私
 
-## 导入历史聊天
+可保存多个配置并切换：名称、协议、API Base URL、模型 ID、API Key。
 
-在 AI 对话左侧选择“导入历史聊天”：
+- **OpenAI 兼容协议**：通常以 `/v1` 结尾，不含 `/chat/completions`。可连接提供该协议的服务商；Gemini 兼容入口参见其[官方说明](https://ai.google.dev/gemini-api/docs/openai)。请填写账户可用的准确模型 ID。
+- **Anthropic Messages**：例如 `https://api.anthropic.com/v1`，不含 `/messages`。
+- 仅 HTTPS，禁止重定向。测试连接会发起一次服务商请求，可能计费。没有 API Key 时本地功能照常使用。
 
-- ChatGPT 导出的 `conversations.json`，有 `current_node` 时沿当前分支导入。
-- Claude JSON 中的 `chat_messages`（human / assistant）。
-- 通用格式：`{"title":"对话标题","messages":[{"role":"user","content":"我的经历"}]}`。
-- TXT / Markdown：作为一条用户消息导入，之后可交给 AI 梳理。
+只有点击 AI 操作才会发送资料：聊天可选择是否附带已确认知识、基本信息和参考文档；提取建议发送当前知识、基本信息和选定文档/对话；JD 识别发送原始页面；AI 定制发送候选已确认事实与岗位 JD。**原始附件和照片不会发送给模型。** 建议经你确认后才写入，旧建议不能覆盖已修改的关联知识。
 
-不直接处理 ZIP、聊天网页链接、图片或音频。其他平台可先转成通用 JSON / TXT。请核对来源：聊天中的 AI 回复不等于真实经历。
+API Key 以 AES-256-GCM 加密存储，接口不返回已保存的明文。密钥在独立的 `secrets.key`；这不抵抗能读取整个硬盘的攻击者，建议开启磁盘加密。模型配置和密钥不进入普通 JSON 备份。
 
-## 数据备份与恢复
+## 历史聊天
 
-“模型与数据设置 → 导出全部数据”生成带格式版本的 JSON，含资料、聊天、参考文档文字、岗位、简历及历史版本，**不含模型配置和 API Key**。恢复前显示数据数量并要求确认；服务会先将旧数据保存到私人目录的 `backups/`。备份未加密，请自行妥善保管。浏览器下载位置由浏览器设置决定；使用外置硬盘时，导出的 Word、PDF 和 JSON 也请选择硬盘上的私人目录。
+支持 ChatGPT `conversations.json`（沿 `current_node` 当前分支）、Claude `chat_messages`、通用 JSON：
 
-完整机器迁移：先停止 CVOS，复制整个 `private-data` 目录至新电脑的代码仓库外。仅复制数据库无法解密模型凭证，需同时复制 `secrets.key`；也可用普通 JSON 备份恢复后重新配置模型。不要在运行中单独复制 SQLite 文件。
+```json
+{"title":"对话标题","messages":[{"role":"user","content":"我的经历"}]}
+```
+
+TXT/Markdown 作为用户消息导入。AI 回复不能当作真实经历；导入不自动写入已确认知识。不直接处理 ZIP、聊天网页链接、图片或音频。
+
+## 备份与恢复
+
+设置中“导出全部数据”生成 `format: cvos, version: 1` JSON，含知识、附件、基本信息、聊天、文档文字、岗位、简历、照片、事实快照与历史版本。恢复前显示数据数量并要求确认，服务先备份当前资料，再检查修订号并恢复。兼容 v0.1.0 备份，恢复时补充知识条目。备份未加密，请妥善保管。
+
+完整迁移电脑：停止服务后复制整个私人目录，包括 `secrets.key`；仅复制数据库无法解密模型凭证。也可用 JSON 备份恢复后重填模型配置。不要在运行中直接复制 SQLite 文件。降级到旧程序应使用升级前副本，不建议让 v0.1.0 修改 v0.2.0 的数据。
 
 ## 开发与验证
 
 ```sh
 npm ci
-npm run dev    # 同一个本地端口，Vite 开发界面
-npm run check  # 自动化测试 + 生产构建
+npm run dev
+npm run check
 ```
 
-架构：React + Vite 界面、Express 本地服务、Node 内置 SQLite、Zod 输入校验、docx 导出、Mammoth 与 PDF.js 文字提取。SQLite 在当前 Node 24 版本仍可能打印实验性提示；项目锁定运行时下限并通过实际读写测试。没有向量数据库和云数据库依赖。
+测试会创建独立合成资料目录，不读维护者真实私人数据。单页导出集成测试需要 LibreOffice；Linux CI 安装 `libreoffice-writer` 和 `fonts-noto-cjk`。
 
-目录：`src/` 界面，`server/` 本地 API、数据与模型适配，`tests/` 合成资料自动测试。`package-lock.json` 固定依赖；CI 使用 Node 24。
+架构：React + Vite，Express 本地服务，Node 内置 SQLite，Zod 校验，docx 生成，LibreOffice 排版，PDF.js 页数检查与实际预览，Mammoth/PDF.js 文档提取。排版临时文件只在私人目录创建，完成后清理；缓存仅在当前进程内且有数量上限。没有向量数据库、云数据库、Docker 或云端账户依赖。
 
-实现与验证分为三个提交阶段：本地数据与安全基础、完整求职流程界面、验证和开源文档。当前迭代不提供富文本拖拽模板、OCR、加密备份、多用户权限或自动投递。
+详见 [验证记录](docs/VALIDATION.md)、[更新记录](CHANGELOG.md)、[安全说明](SECURITY.md) 和 [参与指南](CONTRIBUTING.md)。
 
-## 安全与参与
+## 已知边界
 
-参见 [SECURITY.md](SECURITY.md) 和 [CONTRIBUTING.md](CONTRIBUTING.md)。提交问题和截图前请删除个人经历、邮箱、简历、API Key 和备份。不要提交真实私人材料作为测试数据。
+- Word 在不同电脑、字体和编辑器中打开后可能重新分页；PDF 固定为本机已验证的一页。跨机器提交优先使用 PDF，并确保 Word 所需字体存在。
+- 中文字体建议安装 Noto Sans CJK SC；缺失时排版引擎会回退到本机字体，必须检查实际预览。Linux CI 使用 Noto CJK。
+- 知识库是本地 Markdown 条目系统，没有 Notion 式拖拽块、数据库视图或 Obsidian 插件兼容；`[[标题]]` 重名时跳转首个匹配，精确关联可用条目选择框。
+- 本地 JD 与关键词排序属于规则辅助；AI 的理解、缺口判断仍需核对。候选事实和模型上下文有数量限制，长知识库会先排序筛选。
+- 不提供 OCR、多用户权限、加密 JSON 备份、招聘网站抓取或自动投递。Windows 尚未实机验收。
 
 MIT License。第三方依赖保留各自许可。
-
-技术参考：[Vite](https://vite.dev/guide/)、[Node SQLite](https://nodejs.org/docs/latest-v24.x/api/sqlite.html)、[docx](https://docx.js.org/)、[Anthropic Messages](https://platform.claude.com/docs/en/api/messages)。

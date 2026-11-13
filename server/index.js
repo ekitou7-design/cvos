@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
 import mammoth from "mammoth";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
@@ -17,14 +16,16 @@ import {
   publicSettings,
   encrypt,
 } from "./store.js";
-import {
-  uid,
-  profileSchema,
-  stateSchema,
-  parseChatImport,
-  resumeBlocks,
-} from "./domain.js";
+import { uid, profileSchema, stateSchema, parseChatImport } from "./domain.js";
 import { callAI, factRule } from "./ai.js";
+import {
+  candidates,
+  parseJD,
+  verifyJD,
+  migrateState,
+  categories,
+} from "./knowledge.js";
+import { checkedResume, fitSelection, compactContent } from "./render.js";
 const app = express(),
   port = Number(process.env.PORT || 3210),
   token = randomBytes(32).toString("hex");
@@ -36,7 +37,7 @@ app.use((req, res, next) => {
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
     "Content-Security-Policy":
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; object-src 'none'; frame-ancestors 'none'",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; object-src 'none'; frame-ancestors 'none'",
   });
   if (!hosts.has(req.headers.host))
     return res.status(403).json({ error: "禁止访问此主机" });
@@ -56,9 +57,9 @@ app.use("/api", (req, res, next) => {
     return res.status(403).json({ error: "会话验证失败，请刷新页面。" });
   next();
 });
-app.use(express.json({ limit: "24mb" }));
+app.use(express.json({ limit: "128mb" }));
 app.get("/api/session", (_, res) =>
-  res.json({ token, dataDir, version: "0.1.0" }),
+  res.json({ token, dataDir, version: "0.2.0" }),
 );
 app.get("/api/state", (_, res) => res.json(readState()));
 app.put("/api/state", (req, res) => {
@@ -138,7 +139,17 @@ app.post("/api/ai/chat", async (req, res) => {
     factRule +
     "\n资料只有经确认才能更新。不要声称已更新资料。\n" +
     (input.useProfile
-      ? "用户已同意参考资料：" + JSON.stringify(snapshot.state.profile)
+      ? "用户已同意参考资料：" +
+        JSON.stringify({
+          identity: Object.fromEntries(
+            Object.entries(snapshot.state.profile).filter(
+              ([k]) => !categories[k],
+            ),
+          ),
+          knowledge: snapshot.state.knowledge
+            .filter((e) => e.confirmed)
+            .map(({ attachments, ...e }) => e),
+        })
       : "不参考个人资料。") +
     "\n用户选择的参考文档：" +
     JSON.stringify(sources);
@@ -176,7 +187,12 @@ app.post("/api/ai/proposal", async (req, res) => {
       {
         role: "user",
         content: JSON.stringify({
-          currentProfile: snapshot.state.profile,
+          currentProfile: Object.fromEntries(
+            Object.entries(snapshot.state.profile).filter(
+              ([k]) => !categories[k],
+            ),
+          ),
+          knowledge: snapshot.state.knowledge.map(({ attachments, ...e }) => e),
           messages: chat?.messages,
           sources,
         }),
@@ -214,53 +230,179 @@ app.post("/api/proposals/:id", (req, res) => {
         throw e;
       }
     }
+    for (const [key, content] of Object.entries(p.patch)) {
+      if (!categories[key]) continue;
+      const entry = s.state.knowledge.find((e) => e.id === `legacy-${key}`);
+      if (entry && entry.content !== p.baseProfile[key])
+        throw Object.assign(new Error("关联知识条目已修改，请重新提取建议。"), {
+          status: 409,
+        });
+      const date = new Date().toISOString();
+      if (entry) {
+        entry.content = content;
+        entry.confirmed = key !== "notes";
+        entry.updatedAt = date;
+      } else
+        s.state.knowledge.push({
+          id: `legacy-${key}`,
+          title: categories[key],
+          category: categories[key],
+          content,
+          tags: ["已确认建议"],
+          links: [],
+          confirmed: key !== "notes",
+          attachments: [],
+          createdAt: date,
+          updatedAt: date,
+        });
+    }
     s.state.profile = { ...s.state.profile, ...p.patch };
   }
   p.status = action === "accept" ? "accepted" : "rejected";
   res.json(saveState(s.state, s.revision));
 });
-app.post("/api/ai/resume", async (req, res) => {
-  const input = z.object({ jobId: z.string() }).parse(req.body),
-    s = readState(),
-    job = s.state.jobs.find((j) => j.id === input.jobId);
-  if (!job?.jd.trim()) throw new Error("请先填写并保存 JD");
-  if (
-    !s.state.profile.name &&
-    !s.state.profile.experience &&
-    !s.state.profile.projects
-  )
-    throw new Error("请先建立个人资料");
+app.post("/api/jd/parse", async (req, res) => {
+  const { raw, mode } = z
+    .object({
+      raw: z.string().min(1).max(200000),
+      mode: z.enum(["local", "ai"]).default("local"),
+    })
+    .parse(req.body);
+  if (mode === "local") return res.json(parseJD(raw));
   const result = await callAI(
-    [
-      {
-        role: "user",
-        content: JSON.stringify({
-          profile: s.state.profile,
-          job: { title: job.title, company: job.company, jd: job.jd },
-        }),
-      },
-    ],
+    [{ role: "user", content: raw }],
     factRule +
-      '只输出 JSON：{"content":"简历 Markdown 正文","gaps":"资料中缺失的岗位要求"}。使用 # 姓名、## 章节与短横线列表。只使用资料库已存在的事实。不得把 JD 要求改写为已具备能力，未知信息略去。缺口放 gaps，不进入简历。',
+      "提取招聘网页正文。只输出 JSON，字段 company,title,location,salary,requirements,jd,url，全部为字符串。删除导航、推荐岗位与按钮。字段的每一行必须逐字摘自输入；不能补全或改写；未知填空字符串。保留完整岗位职责与要求。",
     true,
   );
-  const content = z.string().min(1).max(200000).parse(result.content),
-    id = uid(),
-    now = new Date().toISOString();
+  res.json(verifyJD(result, raw));
+});
+app.post("/api/compact", async (req, res) => {
+  const input = z
+    .object({
+      content: z.string().min(1).max(200000),
+      photo: z.string().max(1000000).default(""),
+      jobId: z.string().default(""),
+    })
+    .parse(req.body);
+  const job = readState().state.jobs.find((j) => j.id === input.jobId);
+  res.json(
+    await compactContent(
+      input.content,
+      input.photo,
+      [job?.title, job?.jd, job?.requirements].filter(Boolean).join("\n"),
+    ),
+  );
+});
+app.post("/api/render", async (req, res) => {
+  const { content, photo } = z
+    .object({
+      content: z.string().min(1).max(200000),
+      photo: z.string().max(1000000).default(""),
+    })
+    .parse(req.body);
+  const result = await checkedResume(content, photo);
+  res.json({
+    pages: result.pages,
+    fontSize: result.fontSize,
+    pdf: result.pdf.toString("base64"),
+  });
+});
+app.post("/api/ai/resume", async (req, res) => {
+  const input = z
+    .object({
+      jobId: z.string(),
+      mode: z.enum(["local", "ai"]).default("ai"),
+      photo: z.string().max(1000000).default(""),
+    })
+    .parse(req.body);
+  const s = readState(),
+    job = s.state.jobs.find((j) => j.id === input.jobId);
+  if (!job?.jd.trim()) throw new Error("请先填写并保存 JD");
+  const matchText = [job.title, job.location, job.requirements, job.jd]
+    .filter(Boolean)
+    .join("\n");
+  let candidateSize = 0;
+  let units = candidates(s.state, matchText)
+    .slice(0, 80)
+    .filter((u) => {
+      if (candidateSize + u.text.length > 30000) return false;
+      candidateSize += u.text.length;
+      return true;
+    });
+  if (!units.length) throw new Error("请在个人知识库中填写并确认真实经历。");
+  let gaps = "",
+    selectionNote = "按 JD 关键词本地排序；逐字选用已确认知识条目。";
+  if (input.mode === "ai") {
+    const result = await callAI(
+      [
+        {
+          role: "user",
+          content: JSON.stringify({
+            job: {
+              title: job.title,
+              company: job.company,
+              location: job.location,
+              salary: job.salary,
+              requirements: job.requirements,
+              jd: job.jd,
+            },
+            candidates: units.map(({ score, ...u }) => u),
+          }),
+        },
+      ],
+      factRule +
+        '只输出 JSON：{"ids":["片段ID"],"gaps":"缺失的岗位要求"}。为单页简历选择最相关的事实片段，按重要性排序，最多30个。只能返回输入中的 ID，不生成简历正文。不因 JD 提及某技能就认为用户具有该技能。',
+      true,
+    );
+    const ids = z.array(z.string()).min(1).max(30).parse(result.ids);
+    if (
+      new Set(ids).size !== ids.length ||
+      ids.some((id) => !units.some((u) => u.id === id))
+    )
+      throw new Error("模型返回了无依据或重复的片段，请重新生成。");
+    units = ids.map((id) => units.find((u) => u.id === id));
+    gaps = String(result.gaps || "").slice(0, 20000);
+    selectionNote = "AI 选择与排序，正文逐字来自已确认知识条目。";
+  }
+  // Bound the initial render; whole low-priority units can be omitted, never cut mid-line.
+  let length = 0;
+  units = units.filter((u) => {
+    if (length + u.text.length > 7000) return false;
+    length += u.text.length;
+    return true;
+  });
+  const fit = await fitSelection(s.state.profile, units, input.photo);
+  const id = uid(),
+    date = new Date().toISOString();
+  const evidence = fit.selected.map(({ entryId, title, text }) => ({
+    entryId,
+    title,
+    text,
+  }));
+  const omitted = candidates(s.state, matchText).length - fit.selected.length;
+  selectionNote += ` 本次选用 ${fit.selected.length} 个完整片段，未选用 ${omitted} 个；正文 ${fit.fontSize} pt，已校验一页 A4。`;
   s.state.resumes.unshift({
     id,
     title: `${job.company} · ${job.title}`,
-    content,
+    content: fit.content,
+    photo: input.photo,
+    evidence,
+    selectionNote,
     jobId: job.id,
-    updatedAt: now,
-    versions: [{ id: uid(), content, createdAt: now }],
+    updatedAt: date,
+    versions: [
+      {
+        id: uid(),
+        content: fit.content,
+        photo: input.photo,
+        evidence,
+        createdAt: date,
+      },
+    ],
   });
   job.resumeId = id;
-  res.json({
-    ...saveState(s.state, s.revision),
-    resumeId: id,
-    gaps: String(result.gaps || ""),
-  });
+  res.json({ ...saveState(s.state, s.revision), resumeId: id, gaps });
 });
 app.post("/api/import/chat", (req, res) => {
   const input = z
@@ -328,9 +470,10 @@ app.post("/api/restore", (req, res) => {
     .object({
       format: z.literal("cvos"),
       version: z.literal(1),
-      state: stateSchema,
+      state: z.unknown(),
     })
     .parse(req.body.backup);
+  input.state = stateSchema.parse(migrateState(input.state));
   const revision = z.number().int().parse(req.body.revision),
     s = readState();
   if (revision !== s.revision) {
@@ -347,55 +490,24 @@ app.post("/api/restore", (req, res) => {
   );
   res.json(saveState(input.state, revision));
 });
-app.get("/api/resumes/:id/docx", async (req, res) => {
+app.get("/api/resumes/:id/:format", async (req, res) => {
+  if (!["docx", "pdf"].includes(req.params.format)) return res.sendStatus(404);
   const r = readState().state.resumes.find((r) => r.id === req.params.id);
   if (!r) return res.sendStatus(404);
-  const children = resumeBlocks(r.content).map(
-    (b) =>
-      new Paragraph({
-        children: [
-          new TextRun({
-            text: b.text,
-            font: {
-              ascii: "Arial",
-              hAnsi: "Arial",
-              eastAsia: "Arial Unicode MS",
-              cs: "Arial",
-            },
-            language: { value: "en-US", eastAsia: "zh-CN" },
-            color: "24292F",
-            size: b.type === "title" ? 36 : 22,
-          }),
-        ],
-        heading:
-          b.type === "title"
-            ? HeadingLevel.TITLE
-            : b.type === "heading"
-              ? HeadingLevel.HEADING_1
-              : undefined,
-        bullet: b.type === "bullet" ? { level: 0 } : undefined,
-        spacing: { after: 100 },
-      }),
-  );
-  const doc = new Document({
-    sections: [
-      {
-        properties: {
-          page: {
-            size: { width: 11906, height: 16838 },
-            margin: { top: 850, bottom: 850, left: 1000, right: 1000 },
-          },
-        },
-        children,
-      },
-    ],
-  });
+  const result = await checkedResume(r.content, r.photo);
+  if (result.pages !== 1)
+    return res.status(422).json({
+      error: `当前正文为 ${result.pages} 页。请精简内容并重新校验；不会截断或隐藏正文。`,
+    });
+  const word = req.params.format === "docx";
   res
     .type(
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      word
+        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        : "application/pdf",
     )
-    .attachment("resume.docx")
-    .send(await Packer.toBuffer(doc));
+    .attachment(`resume.${req.params.format}`)
+    .send(word ? result.docx : result.pdf);
 });
 if (process.argv.includes("--dev")) {
   const { createServer } = await import("vite");
@@ -415,13 +527,17 @@ app.use((err, req, res, next) => {
   res.status(err.status || (err instanceof z.ZodError ? 400 : 500)).json({
     error:
       err instanceof z.ZodError
-        ? "输入格式不正确，请检查字段与文件。"
+        ? err.issues.find((issue) => issue.code === "custom")?.message ||
+          "输入格式不正确，请检查字段与文件。"
         : err.message || "请求失败",
   });
 });
-const server = app.listen(port, "127.0.0.1", () =>
-  console.log(`CVOS http://127.0.0.1:${port}\nPrivate data: ${dataDir}`),
-);
+const server = app.listen(port, "127.0.0.1", () => {
+  const boundPort = server.address().port;
+  hosts.add(`127.0.0.1:${boundPort}`);
+  hosts.add(`localhost:${boundPort}`);
+  console.log(`CVOS http://127.0.0.1:${boundPort}\nPrivate data: ${dataDir}`);
+});
 server.on("error", (e) => {
   console.error(e.message);
   process.exitCode = 1;

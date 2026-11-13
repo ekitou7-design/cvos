@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { emptyState, stateSchema } from "./domain.js";
+import { migrateState } from "./knowledge.js";
 export const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -29,6 +30,22 @@ db.exec(
 db.prepare("INSERT OR IGNORE INTO state VALUES(1,0,?)").run(
   JSON.stringify(emptyState()),
 );
+// Migrate once in a transaction; keep an exact pre-migration backup outside Git.
+const stored = db.prepare("SELECT * FROM state WHERE id=1").get();
+const previous = JSON.parse(stored.body);
+if (!Object.hasOwn(previous, "knowledge")) {
+  const migrated = stateSchema.parse(migrateState(previous));
+  const backupDir = path.join(dataDir, "backups");
+  fs.mkdirSync(backupDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(backupDir, `before-v020-${Date.now()}.json`),
+    JSON.stringify({ format: "cvos", version: 1, state: previous }),
+    { flag: "wx", mode: 0o600 },
+  );
+  db.prepare(
+    "UPDATE state SET body=?, revision=revision+1 WHERE id=1 AND revision=?",
+  ).run(JSON.stringify(migrated), stored.revision);
+}
 const keyPath = path.join(dataDir, "secrets.key");
 if (!fs.existsSync(keyPath))
   fs.writeFileSync(keyPath, randomBytes(32), { mode: 0o600, flag: "wx" });
@@ -47,7 +64,7 @@ export function decrypt(s) {
 }
 export function readState() {
   const r = db.prepare("SELECT * FROM state WHERE id=1").get();
-  return { revision: r.revision, state: JSON.parse(r.body) };
+  return { revision: r.revision, state: stateSchema.parse(JSON.parse(r.body)) };
 }
 export function saveState(state, revision) {
   const valid = stateSchema.parse(state);

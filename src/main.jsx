@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import { Knowledge, PhotoEditor } from "./Knowledge.jsx";
+const Preview = React.lazy(() => import("./Preview.jsx"));
 const labels = {
   name: "姓名",
   headline: "求职方向",
@@ -117,7 +119,7 @@ function App() {
     [state, setState] = useState(null),
     [revision, setRevision] = useState(0),
     [session, setSession] = useState({}),
-    [module, setModule] = useState("chat"),
+    [module, setModule] = useState("profile"),
     [settings, setSettings] = useState(null),
     [showSettings, setShowSettings] = useState(false),
     [notice, setNotice] = useState(null),
@@ -198,7 +200,7 @@ function App() {
   const pending = state.proposals.filter((p) => p.status === "pending").length;
   const titles = {
     chat: ["AI 对话", "从一次对话，梳理你的下一步。"],
-    profile: ["个人资料库", "每一段经历，都是你的独有资产。"],
+    profile: ["个人知识库", "每一段经历，都是你的独有资产。"],
     target: ["JD 定制", "让真实经历，与理想岗位相遇。"],
     file: ["简历库", "为每一次机会，准备好自己。"],
   };
@@ -208,13 +210,13 @@ function App() {
         <div className="brand">
           <span className="brand-mark">C</span>
           <b>CVOS</b>
-          <span className="version">BETA</span>
+          <span className="version">0.2.0</span>
         </div>
         <div className="workspace-label">个人工作空间</div>
         <nav>
           {[
             ["chat", "AI 对话"],
-            ["profile", "个人资料库"],
+            ["profile", "个人知识库"],
             ["target", "JD 定制"],
             ["file", "简历库"],
           ].map(([key, label]) => (
@@ -320,7 +322,10 @@ function App() {
             />
           )}
           {module === "profile" && (
-            <Profile {...{ state, save, run, apply, setDirty }} />
+            <Profile
+              key={editorEpoch}
+              {...{ state, save, run, apply, setDirty }}
+            />
           )}
           {module === "target" && (
             <Jobs
@@ -339,7 +344,7 @@ function App() {
             />
           )}
         </fieldset>
-        <footer>CVOS · 让经历有迹可循，让机会有所准备。</footer>
+        <footer>CVOS 0.2.0 · 知识沉淀于本地，简历因机会而生。</footer>
       </main>
       {showSettings && (
         <Settings
@@ -373,7 +378,7 @@ function Sources({ sources, selected, onChange }) {
       ))}
     </div>
   ) : (
-    <p className="muted">还没有参考文档，可在个人资料库导入。</p>
+    <p className="muted">还没有参考文档，可在个人知识库导入。</p>
   );
 }
 function Chat({
@@ -608,7 +613,10 @@ function Chat({
 }
 function Profile({ state, save, run, apply, setDirty }) {
   const [profile, setProfile] = useState(state.profile),
-    [sources, setSources] = useState([]);
+    [sources, setSources] = useState([]),
+    [knowledgeDirty, setKnowledgeDirty] = useState(false);
+  const profileDirty =
+    JSON.stringify(profile) !== JSON.stringify(state.profile);
   useEffect(() => setProfile(state.profile), [JSON.stringify(state.profile)]);
   async function importFile(f) {
     if (f.size > 12000000) throw new Error("文件最大 12 MB");
@@ -619,185 +627,226 @@ function Profile({ state, save, run, apply, setDirty }) {
     apply(await api("/import/document", { name: f.name, base64: btoa(str) }));
   }
   return (
-    <div className="profile-layout">
-      <section className="card">
-        <div className="card-heading">
-          <div>
-            <h2>我的资料</h2>
-            <p>真实、完整，比措辞更重要。</p>
-          </div>
-          <button
-            className="primary"
-            onClick={() => run(() => save({ ...state, profile }), "资料已保存")}
-          >
-            保存资料
-          </button>
-        </div>
-        <div className="profile-fields">
-          {Object.entries(labels).map(([key, label]) => (
-            <Field key={key} label={label}>
-              {["name", "email", "phone", "location", "headline"].includes(
-                key,
-              ) ? (
-                <input
-                  value={profile[key]}
-                  onChange={(e) => {
-                    setProfile({ ...profile, [key]: e.target.value });
-                    setDirty(true);
-                  }}
-                  placeholder={key === "headline" ? "例如：AI 产品运营" : ""}
-                />
-              ) : (
-                <textarea
-                  rows={key === "notes" ? 6 : 4}
-                  value={profile[key]}
-                  onChange={(e) => {
-                    setProfile({ ...profile, [key]: e.target.value });
-                    setDirty(true);
-                  }}
-                  placeholder={
-                    key === "projects"
-                      ? "项目背景、你的具体职责、行动与可核实的结果"
-                      : ""
-                  }
-                />
-              )}
-            </Field>
-          ))}
-        </div>
-      </section>
-      <div className="right-stack">
-        <section className="card">
-          <div className="card-heading">
-            <div>
-              <h2>待确认的资料建议</h2>
-              <p>AI 提议，你来决定。</p>
-            </div>
-            <span className="count">
-              {state.proposals.filter((p) => p.status === "pending").length}
-            </span>
-          </div>
-          {state.proposals
-            .filter((p) => p.status === "pending")
-            .map((p) => (
-              <div className="proposal" key={p.id}>
-                <p className="muted">{p.reason}</p>
-                {Object.entries(p.patch).map(([k, v]) => (
-                  <div className="diff" key={k}>
-                    <b>{labels[k]}</b>
-                    <del>{p.baseProfile[k] || "（空）"}</del>
-                    <ins>{v}</ins>
-                  </div>
-                ))}
-                <div className="actions">
-                  <button
-                    className="secondary"
-                    onClick={() =>
-                      run(async () =>
-                        apply(
-                          await api("/proposals/" + p.id, { action: "reject" }),
-                        ),
-                      )
-                    }
-                  >
-                    拒绝
-                  </button>
-                  <button
-                    className="primary"
-                    onClick={() => {
-                      if (
-                        JSON.stringify(profile) !==
-                        JSON.stringify(state.profile)
-                      ) {
-                        alert("请先保存或放弃手动编辑，再处理资料建议。");
-                        return;
-                      }
-                      run(async () => {
-                        apply(
-                          await api("/proposals/" + p.id, { action: "accept" }),
-                        );
-                        setDirty(false);
-                      }, "已确认并更新资料");
-                    }}
-                  >
-                    确认写入
-                  </button>
+    <>
+      <fieldset disabled={profileDirty}>
+        <Knowledge
+          {...{ state, save, run }}
+          setDirty={(value) => {
+            setKnowledgeDirty(value);
+            setDirty(value);
+          }}
+        />
+      </fieldset>
+      <details className="card identity-details">
+        <summary>基本信息、参考文档与 AI 资料建议</summary>
+        <fieldset disabled={knowledgeDirty}>
+          <div className="profile-layout">
+            <section className="card">
+              <div className="card-heading">
+                <div>
+                  <h2>基本信息</h2>
+                  <p>真实、完整，比措辞更重要。</p>
                 </div>
+                <button
+                  className="primary"
+                  onClick={() =>
+                    run(() => save({ ...state, profile }), "资料已保存")
+                  }
+                >
+                  保存资料
+                </button>
               </div>
-            ))}
-          {!state.proposals.some((p) => p.status === "pending") && (
-            <Empty icon="check" title="目前没有待确认建议">
-              对话或文档中的经历，可由 AI 整理为建议。
-            </Empty>
-          )}
-        </section>
-        <section className="card">
-          <div className="card-heading">
-            <div>
-              <h2>参考文档</h2>
-              <p>导入只存档，不会自动覆盖资料。</p>
+              <div className="profile-fields">
+                {Object.entries(labels)
+                  .filter(([k]) =>
+                    ["name", "headline", "email", "phone", "location"].includes(
+                      k,
+                    ),
+                  )
+                  .map(([key, label]) => (
+                    <Field key={key} label={label}>
+                      {[
+                        "name",
+                        "email",
+                        "phone",
+                        "location",
+                        "headline",
+                      ].includes(key) ? (
+                        <input
+                          value={profile[key]}
+                          onChange={(e) => {
+                            setProfile({ ...profile, [key]: e.target.value });
+                            setDirty(true);
+                          }}
+                          placeholder={
+                            key === "headline" ? "例如：AI 产品运营" : ""
+                          }
+                        />
+                      ) : (
+                        <textarea
+                          rows={key === "notes" ? 6 : 4}
+                          value={profile[key]}
+                          onChange={(e) => {
+                            setProfile({ ...profile, [key]: e.target.value });
+                            setDirty(true);
+                          }}
+                          placeholder={
+                            key === "projects"
+                              ? "项目背景、你的具体职责、行动与可核实的结果"
+                              : ""
+                          }
+                        />
+                      )}
+                    </Field>
+                  ))}
+              </div>
+            </section>
+            <div className="right-stack">
+              <section className="card">
+                <div className="card-heading">
+                  <div>
+                    <h2>待确认的资料建议</h2>
+                    <p>AI 提议，你来决定。</p>
+                  </div>
+                  <span className="count">
+                    {
+                      state.proposals.filter((p) => p.status === "pending")
+                        .length
+                    }
+                  </span>
+                </div>
+                {state.proposals
+                  .filter((p) => p.status === "pending")
+                  .map((p) => (
+                    <div className="proposal" key={p.id}>
+                      <p className="muted">{p.reason}</p>
+                      {Object.entries(p.patch).map(([k, v]) => (
+                        <div className="diff" key={k}>
+                          <b>{labels[k]}</b>
+                          <del>{p.baseProfile[k] || "（空）"}</del>
+                          <ins>{v}</ins>
+                        </div>
+                      ))}
+                      <div className="actions">
+                        <button
+                          className="secondary"
+                          onClick={() =>
+                            run(async () =>
+                              apply(
+                                await api("/proposals/" + p.id, {
+                                  action: "reject",
+                                }),
+                              ),
+                            )
+                          }
+                        >
+                          拒绝
+                        </button>
+                        <button
+                          className="primary"
+                          onClick={() => {
+                            if (
+                              JSON.stringify(profile) !==
+                              JSON.stringify(state.profile)
+                            ) {
+                              alert("请先保存或放弃手动编辑，再处理资料建议。");
+                              return;
+                            }
+                            run(async () => {
+                              apply(
+                                await api("/proposals/" + p.id, {
+                                  action: "accept",
+                                }),
+                              );
+                              setDirty(false);
+                            }, "已确认并更新资料");
+                          }}
+                        >
+                          确认写入
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                {!state.proposals.some((p) => p.status === "pending") && (
+                  <Empty icon="check" title="目前没有待确认建议">
+                    对话或文档中的经历，可由 AI 整理为建议。
+                  </Empty>
+                )}
+              </section>
+              <section className="card">
+                <div className="card-heading">
+                  <div>
+                    <h2>参考文档</h2>
+                    <p>导入只存档，不会自动覆盖资料。</p>
+                  </div>
+                  <label className="button-link">
+                    导入
+                    <input
+                      type="file"
+                      hidden
+                      accept=".pdf,.docx,.txt,.md,.json"
+                      onChange={(e) => {
+                        const f = e.target.files[0];
+                        if (f) run(() => importFile(f), "文档已导入");
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+                <Sources
+                  sources={state.sources}
+                  selected={sources}
+                  onChange={setSources}
+                />
+                {state.sources.map((s) => (
+                  <details className="source-item" key={s.id}>
+                    <summary>{s.name}</summary>
+                    <pre>{s.content}</pre>
+                    <button
+                      className="text-button danger"
+                      onClick={() => {
+                        if (confirm("删除此参考文档？"))
+                          run(() =>
+                            save(
+                              {
+                                ...state,
+                                sources: state.sources.filter(
+                                  (x) => x.id !== s.id,
+                                ),
+                              },
+                              false,
+                            ),
+                          );
+                      }}
+                    >
+                      删除文档
+                    </button>
+                  </details>
+                ))}
+                <button
+                  className="secondary full"
+                  disabled={!sources.length}
+                  onClick={() =>
+                    run(
+                      async () =>
+                        apply(
+                          await api("/ai/proposal", { sourceIds: sources }),
+                        ),
+                      "修改建议已生成，请逐项核对",
+                    )
+                  }
+                >
+                  从所选文档提取资料建议
+                </button>
+                <p className="hint">
+                  所选文档与当前资料将发送至云端模型。扫描 PDF 需先做 OCR。
+                </p>
+              </section>
             </div>
-            <label className="button-link">
-              导入
-              <input
-                type="file"
-                hidden
-                accept=".pdf,.docx,.txt,.md,.json"
-                onChange={(e) => {
-                  const f = e.target.files[0];
-                  if (f) run(() => importFile(f), "文档已导入");
-                  e.target.value = "";
-                }}
-              />
-            </label>
           </div>
-          <Sources
-            sources={state.sources}
-            selected={sources}
-            onChange={setSources}
-          />
-          {state.sources.map((s) => (
-            <details className="source-item" key={s.id}>
-              <summary>{s.name}</summary>
-              <pre>{s.content}</pre>
-              <button
-                className="text-button danger"
-                onClick={() => {
-                  if (confirm("删除此参考文档？"))
-                    run(() =>
-                      save(
-                        {
-                          ...state,
-                          sources: state.sources.filter((x) => x.id !== s.id),
-                        },
-                        false,
-                      ),
-                    );
-                }}
-              >
-                删除文档
-              </button>
-            </details>
-          ))}
-          <button
-            className="secondary full"
-            disabled={!sources.length}
-            onClick={() =>
-              run(
-                async () =>
-                  apply(await api("/ai/proposal", { sourceIds: sources })),
-                "修改建议已生成，请逐项核对",
-              )
-            }
-          >
-            从所选文档提取资料建议
-          </button>
-          <p className="hint">
-            所选文档与当前资料将发送至云端模型。扫描 PDF 需先做 OCR。
-          </p>
-        </section>
-      </div>
-    </div>
+        </fieldset>
+      </details>
+    </>
   );
 }
 const blankJob = () => ({
@@ -809,6 +858,10 @@ const blankJob = () => ({
   status: "准备中",
   notes: "",
   resumeId: "",
+  rawJd: "",
+  location: "",
+  salary: "",
+  requirements: "",
 });
 function Jobs({ state, save, run, apply, setDirty, onResume }) {
   const [job, setJob] = useState(null),
@@ -889,6 +942,50 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
               保存岗位
             </button>
           </div>
+          <Field label="招聘网页原始文本 · 直接整页粘贴">
+            <textarea
+              rows={7}
+              value={job.rawJd || ""}
+              onChange={(e) => change("rawJd", e.target.value)}
+              placeholder="在招聘网站全选并复制，粘贴到这里。识别结果会进入下方字段供你核对，原文始终保留。"
+            />
+          </Field>
+          <div className="actions">
+            {[
+              ["local", "本地整理"],
+              ["ai", "AI 智能识别"],
+            ].map(([mode, label]) => (
+              <button
+                key={mode}
+                className="secondary"
+                disabled={!job.rawJd?.trim()}
+                onClick={() =>
+                  run(async () => {
+                    const result = await api("/jd/parse", {
+                      raw: job.rawJd,
+                      mode,
+                    });
+                    if (
+                      (job.jd || job.company || job.title) &&
+                      !confirm(
+                        "用识别结果替换当前岗位字段？原始文本和投递备注会保留。",
+                      )
+                    )
+                      return;
+                    setJob({ ...job, ...result });
+                    setChanged(true);
+                    setDirty(true);
+                  }, "已整理，请核对公司、岗位、地点、薪资和要求后保存。")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="hint">
+            本地整理无需模型；AI
+            识别会发送原始网页文本。未能确认的字段留空，请核对完整性。
+          </p>
           <div className="form-grid">
             <Field label="公司">
               <input
@@ -900,6 +997,18 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
               <input
                 value={job.title}
                 onChange={(e) => change("title", e.target.value)}
+              />
+            </Field>
+            <Field label="工作地点">
+              <input
+                value={job.location || ""}
+                onChange={(e) => change("location", e.target.value)}
+              />
+            </Field>
+            <Field label="薪资">
+              <input
+                value={job.salary || ""}
+                onChange={(e) => change("salary", e.target.value)}
               />
             </Field>
             <Field label="岗位链接">
@@ -928,6 +1037,13 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
               onChange={(e) => change("jd", e.target.value)}
             />
           </Field>
+          <Field label="任职要求 · 可修改">
+            <textarea
+              rows={5}
+              value={job.requirements || ""}
+              onChange={(e) => change("requirements", e.target.value)}
+            />
+          </Field>
           <Field label="投递备注">
             <textarea
               rows={3}
@@ -939,8 +1055,8 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
           <div className="generation-note">
             <Icon name="lock" />
             <span>
-              生成时将发送已确认的个人资料与此岗位 JD。AI
-              会根据已有事实改写，请核对后使用。
+              AI 定制将发送已确认知识正文与此岗位
+              JD。只选取原文事实片段；附件不会发送。生成后可编辑与添加照片。
             </span>
           </div>
           <div className="actions">
@@ -968,6 +1084,24 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
               </button>
             )}
             <button
+              className="secondary"
+              disabled={
+                changed ||
+                !state.jobs.some((j) => j.id === job.id) ||
+                !job.jd.trim()
+              }
+              onClick={() =>
+                run(async () => {
+                  const result = apply(
+                    await api("/ai/resume", { jobId: job.id, mode: "local" }),
+                  );
+                  onResume(result.resumeId);
+                }, "已从已确认知识中选取原文并校验一页 A4")
+              }
+            >
+              本地生成单页简历
+            </button>
+            <button
               className="primary"
               disabled={
                 changed ||
@@ -982,7 +1116,7 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
                 }, "专属简历已生成，请核对内容")
               }
             >
-              生成专属简历 <Icon name="arrow" />
+              AI 定制单页简历 <Icon name="arrow" />
             </button>
           </div>
         </section>
@@ -996,109 +1130,20 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
     </div>
   );
 }
-function blocks(content) {
-  return content
-    .split("\n")
-    .filter((l) => l.trim())
-    .map((line) => ({
-      text: line.replace(/^#{1,3}\s+|^[-*]\s+/g, ""),
-      type: /^#\s/.test(line)
-        ? "title"
-        : /^#{2,3}\s/.test(line)
-          ? "heading"
-          : /^[-*]\s/.test(line)
-            ? "bullet"
-            : "text",
-    }));
-}
-function A4({ content }) {
-  const [pages, setPages] = useState([[]]),
-    measure = useRef(null);
-  useLayoutEffect(() => {
-    const el = measure.current;
-    if (!el) return;
-    const capacity = 950;
-    let pages = [[]],
-      used = 0;
-    const height = (b) => {
-      el.className = "resume-block " + b.type;
-      el.textContent = (b.type === "bullet" ? "• " : "") + b.text;
-      return (
-        el.getBoundingClientRect().height +
-        parseFloat(getComputedStyle(el).marginBottom || 0)
-      );
-    };
-    for (const source of blocks(content)) {
-      let remaining = source.text;
-      while (remaining) {
-        const b = { ...source, text: remaining };
-        let h = height(b);
-        if (h <= capacity - used) {
-          pages.at(-1).push(b);
-          used += h;
-          break;
-        }
-        if (used) {
-          pages.push([]);
-          used = 0;
-          continue;
-        }
-        let lo = 1,
-          hi = remaining.length;
-        while (lo < hi) {
-          const mid = Math.ceil((lo + hi) / 2);
-          if (height({ ...b, text: remaining.slice(0, mid) }) <= capacity)
-            lo = mid;
-          else hi = mid - 1;
-        }
-        pages.at(-1).push({ ...b, text: remaining.slice(0, lo) });
-        remaining = remaining.slice(lo);
-        if (remaining) {
-          pages.push([]);
-          used = 0;
-        }
-      }
-    }
-    setPages(pages);
-  }, [content]);
-  return (
-    <div className="preview-area">
-      <div className="preview-label">
-        A4 · 实时预览 <span>{pages.length} 页</span>
-      </div>
-      <div className="measure-page">
-        <div ref={measure} />
-      </div>
-      <div className="paper-stack">
-        {pages.map((page, i) => (
-          <div className="paper" key={i}>
-            <div className="paper-content">
-              {page.map((b, j) => (
-                <div className={"resume-block " + b.type} key={j}>
-                  {b.type === "bullet" ? "• " : ""}
-                  {b.text}
-                </div>
-              ))}
-            </div>
-            <span className="page-number">
-              {i + 1} / {pages.length}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
   const current =
     state.resumes.find((r) => r.id === resumeId) || state.resumes[0];
   const [content, setContent] = useState(current?.content || ""),
     [title, setTitle] = useState(current?.title || ""),
+    [photo, setPhoto] = useState(current?.photo || ""),
+    [evidence, setEvidence] = useState(current?.evidence || []),
     [changed, setChanged] = useState(false),
     [history, setHistory] = useState(false);
   useEffect(() => {
     setContent(current?.content || "");
     setTitle(current?.title || "");
+    setPhoto(current?.photo || "");
+    setEvidence(current?.evidence || []);
     setChanged(false);
   }, [current?.id, current?.updatedAt]);
   async function persist() {
@@ -1109,8 +1154,13 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
       ...current,
       content,
       title,
+      photo,
+      evidence,
       updatedAt: date,
-      versions: [...current.versions, { id: id(), content, createdAt: date }],
+      versions: [
+        ...current.versions,
+        { id: id(), content, photo, title, evidence, createdAt: date },
+      ],
     };
     await save({
       ...state,
@@ -1124,6 +1174,17 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
     setChanged(false);
     setResumeId(r.id);
   };
+  async function downloadResume(id, format) {
+    const response = await fetch("/api/resumes/" + id + "/" + format);
+    if (!response.ok)
+      throw new Error((await response.json()).error || "导出失败");
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = (title || "resume") + "." + format;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   return (
     <div>
       <div className="resume-toolbar">
@@ -1164,14 +1225,9 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
                     .filter(Boolean)
                     .join(" · ") +
                   "\n" +
-                  [
-                    ["education", "教育经历"],
-                    ["experience", "工作经历"],
-                    ["projects", "项目经历"],
-                    ["skills", "技能"],
-                  ]
-                    .filter(([k]) => state.profile[k])
-                    .map(([k, t]) => "## " + t + "\n" + state.profile[k])
+                  state.knowledge
+                    .filter((e) => e.confirmed && e.content.trim())
+                    .map((e) => "## " + e.title + "\n" + e.content)
                     .join("\n"),
                 jobId: "",
                 updatedAt: now(),
@@ -1198,7 +1254,7 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
               onClick={() =>
                 run(async () => {
                   await persist();
-                  window.location.href = "/api/resumes/" + current.id + "/docx";
+                  await downloadResume(current.id, "docx");
                 })
               }
             >
@@ -1210,12 +1266,11 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
               onClick={() =>
                 run(async () => {
                   await persist();
-                  document.title = title || "CVOS 简历";
-                  window.print();
+                  await downloadResume(current.id, "pdf");
                 })
               }
             >
-              PDF / 打印
+              PDF
             </button>
             <button
               className="primary"
@@ -1239,6 +1294,9 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
                 if (changed && !confirm("放弃当前编辑并载入此历史版本？"))
                   return;
                 setContent(v.content);
+                setPhoto(v.photo || "");
+                setEvidence(v.evidence || []);
+                if (v.title) setTitle(v.title);
                 setChanged(true);
                 setDirty(true);
                 setHistory(false);
@@ -1282,9 +1340,60 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
               />
             </Field>
             <p className="hint">
-              # 姓名 · ## 章节 · - 列表。预览会自动分页。PDF 通过浏览器“另存为
-              PDF”导出，请选择 A4、100% 缩放并关闭页眉页脚。
+              # 姓名 · ## 章节 · -
+              列表。修改会重新校验实际分页。超页内容必须精简后才能导出；正文最小
+              10.5 pt。
             </p>
+            <button
+              className="secondary full"
+              disabled={!content.trim()}
+              onClick={() =>
+                run(async () => {
+                  await persist();
+                  const result = await api("/compact", {
+                    content,
+                    photo,
+                    jobId: current.jobId || "",
+                  });
+                  if (result.content !== content) {
+                    setContent(result.content);
+                    setChanged(true);
+                    setDirty(true);
+                    alert(
+                      "已保留完整事实并精简到一页。请检查后保存新版本。原内容保留在历史版本中。\n\n本次省略的完整片段：\n" +
+                        result.omitted.join("\n"),
+                    );
+                  }
+                }, "已校验单页内容，请核对后保存")
+              }
+            >
+              按岗位精简到一页
+            </button>
+            <PhotoEditor
+              key={current.id}
+              photo={photo}
+              run={run}
+              onChange={(value) => {
+                setPhoto(value);
+                setChanged(true);
+                setDirty(true);
+              }}
+            />
+            {current.selectionNote && (
+              <p className="hint">生成记录：{current.selectionNote}</p>
+            )}
+            <details className="evidence">
+              <summary>生成时的事实来源 · {evidence.length} 个片段</summary>
+              <p className="hint">
+                这是生成时的原文快照。手动编辑的新增内容需要你自行核对。
+              </p>
+              {evidence.map((e, i) => (
+                <blockquote key={i}>
+                  <b>{e.title}</b>
+                  <p>{e.text}</p>
+                </blockquote>
+              ))}
+            </details>
             <button
               className="text-button danger"
               onClick={() => {
@@ -1304,7 +1413,9 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
               删除简历
             </button>
           </section>
-          <A4 content={content} />
+          <React.Suspense fallback={<p>正在加载 A4 预览…</p>}>
+            <Preview content={content} photo={photo} request={api} />
+          </React.Suspense>
         </div>
       ) : (
         <div className="card">
@@ -1566,7 +1677,8 @@ function Settings({
             <div className="restore-box">
               <h3>确认恢复此备份？</h3>
               <p>
-                包含 {restore.state.chats?.length || 0} 段对话、
+                包含 {restore.state.knowledge?.length || 0} 条知识（含附件）、
+                {restore.state.chats?.length || 0} 段对话、
                 {restore.state.resumes?.length || 0} 份简历、
                 {restore.state.jobs?.length || 0}{" "}
                 个岗位。将替换当前数据；恢复前会在本地自动保存副本。模型密钥保持当前设置。
