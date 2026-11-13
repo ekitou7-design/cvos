@@ -11,6 +11,7 @@ import {
   emptyState,
   stateSchema,
   assertTextIntegrity,
+  migrateResumeDrafts,
 } from "../server/domain.js";
 import {
   migrateState,
@@ -29,6 +30,28 @@ test("knowledge migration, exact selection, JD cleaning and unsupported facts", 
   delete old.knowledge;
   old.profile.projects = "完成 12 次合成测试";
   old.profile.notes = "未核对草稿";
+  const legacyResume = {
+    id: "legacy-resume",
+    title: "旧简历",
+    content: "旧正文",
+    photo,
+    versions: [{ id: "v", content: "旧版本", photo, createdAt: "" }],
+  };
+  const legacy = {
+    ...old,
+    resumes: [legacyResume],
+    jobs: [{ id: "old-job", resumeId: legacyResume.id }],
+  };
+  delete legacy.resumeDrafts;
+  const moved = migrateResumeDrafts(legacy);
+  assert.equal(moved.resumes.length, 0);
+  assert.deepEqual(moved.resumeDrafts, [legacyResume]);
+  assert.equal(moved.jobs[0].resumeId, "");
+  assert.deepEqual(migrateResumeDrafts(moved), moved);
+  assert.throws(
+    () => migrateResumeDrafts({ ...moved, resumeDrafts: "bad" }),
+    /格式/,
+  );
   const migrated = migrateState(old);
   assert.equal(migrated.profile.projects, old.profile.projects);
   assert.equal(migrated.knowledge.length, 2);
@@ -78,11 +101,12 @@ test("knowledge migration, exact selection, JD cleaning and unsupported facts", 
 
 test(
   "v0.2 real workflow: old database, photos, exact one-page exports, overflow refusal and restore",
-  { timeout: 180000 },
+  { timeout: 240000 },
   async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cvos-v020-"));
     const old = emptyState();
     delete old.knowledge;
+    delete old.resumeDrafts;
     old.profile.name = "合成测试用户";
     old.profile.projects =
       "以 SQL 整理 12 份合成报表\n使用 Python 校验 24 条测试数据";
@@ -119,7 +143,7 @@ test(
       return data;
     }
     try {
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < 600; i++) {
         try {
           token = (await (await fetch(base + "/api/session")).json()).token;
           break;
@@ -166,12 +190,43 @@ test(
         notes: "",
       });
       snapshot = await req("/api/state", snapshot, "PUT");
-      const generated = await req("/api/ai/resume", {
+      let generated = await req("/api/ai/resume", {
         jobId: "j",
         mode: "local",
         photo,
       });
+      assert.equal(generated.state.resumes.length, 0);
+      assert.equal(generated.state.jobs[0].resumeId, "");
+      const draft = generated.state.resumeDrafts[0];
+      assert.equal(draft.id, generated.draftId);
+      assert.equal(draft.versions.length, 0);
+      assert.equal(
+        (await fetch(base + "/api/resumes/" + draft.id + "/pdf")).status,
+        404,
+      );
+      const reloaded = await req("/api/state");
+      assert.equal(reloaded.state.resumeDrafts[0].photo, photo);
+      generated = await req("/api/resume-drafts/" + draft.id + "/confirm", {
+        revision: reloaded.revision,
+        resume: {
+          ...draft,
+          title: "本人确认的合成简历",
+          content: draft.content + "\n- 本人确认的合成说明",
+        },
+      });
       const resume = generated.state.resumes[0];
+      assert.equal(resume.versions[0].content, resume.content);
+      assert.equal(resume.title, "本人确认的合成简历");
+      assert.equal(generated.state.resumeDrafts.length, 0);
+      generated = await req("/api/ai/resume", {
+        jobId: "j",
+        mode: "local",
+        photo,
+      });
+      assert.equal(generated.state.resumeDrafts.length, 1);
+      assert.equal(generated.state.resumes.length, 1);
+      assert.equal(generated.state.jobs[0].resumeId, resume.id);
+      assert.notEqual(generated.draftId, resume.id);
       assert.equal(resume.photo, photo);
       assert.equal(resume.versions[0].photo, photo);
       assert.ok(!resume.content.includes("未经确认"));
@@ -215,6 +270,8 @@ test(
       assert.ok(html.includes("SQL"));
       assert.ok(html.includes("24"));
       const exported = await req("/api/backup");
+      assert.equal(exported.version, 2);
+      assert.equal(exported.state.resumeDrafts.length, 1);
       assert.equal(
         exported.state.knowledge.find((e) => e.id === "attachment")
           .attachments[0].base64,
@@ -252,10 +309,38 @@ test(
       });
       assert.equal(checked.pages, 1);
       assert.ok(checked.fontSize >= 10.5);
-      const restored = await req("/api/restore", {
-        backup: { format: "cvos", version: 1, state: old },
+      const restoredV2 = await req("/api/restore", {
+        backup: exported,
         revision: snapshot.revision,
       });
+      assert.equal(restoredV2.state.resumes.length, 1);
+      assert.equal(restoredV2.state.resumeDrafts[0].photo, photo);
+      const discarded = await req(
+        "/api/state",
+        {
+          revision: restoredV2.revision,
+          state: { ...restoredV2.state, resumeDrafts: [] },
+        },
+        "PUT",
+      );
+      assert.equal(discarded.state.jobs[0].resumeId, resume.id);
+      assert.equal(discarded.state.resumes.length, 1);
+      const restored = await req("/api/restore", {
+        backup: {
+          format: "cvos",
+          version: 1,
+          state: {
+            ...old,
+            resumes: [resume],
+            jobs: [{ ...generated.state.jobs[0], resumeId: resume.id }],
+          },
+        },
+        revision: discarded.revision,
+      });
+      assert.equal(restored.state.resumes.length, 0);
+      assert.equal(restored.state.resumeDrafts[0].id, resume.id);
+      assert.equal(restored.state.resumeDrafts[0].versions[0].photo, photo);
+      assert.equal(restored.state.jobs[0].resumeId, "");
       assert.equal(restored.state.knowledge.length, 2);
       assert.equal(restored.state.profile.name, old.profile.name);
       assert.equal(

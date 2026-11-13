@@ -37,6 +37,10 @@ export function engine() {
   );
   return (
     process.env.CVOS_SOFFICE ||
+    (process.platform === "darwin" &&
+    existsSync("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+      ? "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+      : null) ||
     (process.platform === "darwin" && existsSync(portable) ? portable : null) ||
     (process.platform === "darwin"
       ? "/Applications/LibreOffice.app/Contents/MacOS/soffice"
@@ -90,16 +94,18 @@ async function convert(dir) {
   ];
   try {
     try {
-      await exec(engine(), args, { timeout: 45000, maxBuffer: 200000, env });
+      await exec(engine(), args, { timeout: 90000, maxBuffer: 200000, env });
     } catch (e) {
       if (e.code !== "ENOENT" || process.env.CVOS_SOFFICE) throw e;
-      await exec("soffice", args, { timeout: 45000, maxBuffer: 200000, env });
+      await exec("soffice", args, { timeout: 90000, maxBuffer: 200000, env });
     }
     return await fs.readFile(path.join(dir, "resume.pdf"));
-  } catch {
+  } catch (error) {
     throw Object.assign(
       new Error(
-        "单页排版引擎不可用。请安装 LibreOffice，或用 CVOS_SOFFICE 指定 soffice 路径。正文已保留。",
+        error.killed || error.code === "ETIMEDOUT"
+          ? "排版等待超时，请稍后重试。原正文已保留。"
+          : "单页排版引擎不可用。请安装 LibreOffice，或用 CVOS_SOFFICE 指定 soffice 路径。正文已保留。",
       ),
       { status: 503 },
     );

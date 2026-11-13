@@ -16,7 +16,14 @@ import {
   publicSettings,
   encrypt,
 } from "./store.js";
-import { uid, profileSchema, stateSchema, parseChatImport } from "./domain.js";
+import {
+  uid,
+  profileSchema,
+  stateSchema,
+  resumeSchema,
+  migrateResumeDrafts,
+  parseChatImport,
+} from "./domain.js";
 import { callAI, factRule } from "./ai.js";
 import {
   candidates,
@@ -59,7 +66,7 @@ app.use("/api", (req, res, next) => {
 });
 app.use(express.json({ limit: "128mb" }));
 app.get("/api/session", (_, res) =>
-  res.json({ token, dataDir, version: "0.2.0" }),
+  res.json({ token, dataDir, version: "0.2.1" }),
 );
 app.get("/api/state", (_, res) => res.json(readState()));
 app.put("/api/state", (req, res) => {
@@ -382,7 +389,7 @@ app.post("/api/ai/resume", async (req, res) => {
   }));
   const omitted = candidates(s.state, matchText).length - fit.selected.length;
   selectionNote += ` 本次选用 ${fit.selected.length} 个完整片段，未选用 ${omitted} 个；正文 ${fit.fontSize} pt，已校验一页 A4。`;
-  s.state.resumes.unshift({
+  s.state.resumeDrafts.unshift({
     id,
     title: `${job.company} · ${job.title}`,
     content: fit.content,
@@ -391,18 +398,63 @@ app.post("/api/ai/resume", async (req, res) => {
     selectionNote,
     jobId: job.id,
     updatedAt: date,
+    gaps: String(gaps || ""),
+    versions: [],
+  });
+  res.json({ ...saveState(s.state, s.revision), draftId: id, gaps });
+});
+app.post("/api/resume-drafts/:id/confirm", (req, res) => {
+  const input = z
+    .object({
+      revision: z.number().int().nonnegative(),
+      resume: resumeSchema.pick({
+        title: true,
+        content: true,
+        photo: true,
+        evidence: true,
+      }),
+    })
+    .parse(req.body);
+  if (!input.resume.title.trim() || !input.resume.content.trim())
+    throw Object.assign(new Error("请填写简历名称和正文后确认。"), {
+      status: 400,
+    });
+  const snapshot = readState();
+  if (snapshot.revision !== input.revision)
+    throw Object.assign(
+      new Error("资料已在其他窗口修改，请刷新后再确认。草稿仍会保留。"),
+      { status: 409 },
+    );
+  const draft = snapshot.state.resumeDrafts.find((r) => r.id === req.params.id);
+  if (!draft)
+    throw Object.assign(new Error("草稿已确认、已放弃或不存在，请刷新。"), {
+      status: 409,
+    });
+  const date = new Date().toISOString();
+  const confirmed = {
+    ...draft,
+    ...input.resume,
+    updatedAt: date,
     versions: [
+      ...draft.versions,
       {
         id: uid(),
-        content: fit.content,
-        photo: input.photo,
-        evidence,
+        ...input.resume,
+        evidence: input.resume.evidence,
         createdAt: date,
       },
     ],
+  };
+  snapshot.state.resumes.unshift(confirmed);
+  snapshot.state.resumeDrafts = snapshot.state.resumeDrafts.filter(
+    (r) => r.id !== draft.id,
+  );
+  const job = snapshot.state.jobs.find((j) => j.id === draft.jobId);
+  if (job) job.resumeId = confirmed.id;
+  res.json({
+    ...saveState(snapshot.state, input.revision),
+    resumeId: confirmed.id,
   });
-  job.resumeId = id;
-  res.json({ ...saveState(s.state, s.revision), resumeId: id, gaps });
 });
 app.post("/api/import/chat", (req, res) => {
   const input = z
@@ -460,7 +512,7 @@ app.post("/api/import/document", async (req, res) => {
 app.get("/api/backup", (_, res) => {
   res.attachment("cvos-backup.json").json({
     format: "cvos",
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     state: readState().state,
   });
@@ -469,11 +521,13 @@ app.post("/api/restore", (req, res) => {
   const input = z
     .object({
       format: z.literal("cvos"),
-      version: z.literal(1),
+      version: z.union([z.literal(1), z.literal(2)]),
       state: z.unknown(),
     })
     .parse(req.body.backup);
-  input.state = stateSchema.parse(migrateState(input.state));
+  input.state = stateSchema.parse(
+    migrateResumeDrafts(migrateState(input.state), input.version === 1),
+  );
   const revision = z.number().int().parse(req.body.revision),
     s = readState();
   if (revision !== s.revision) {
@@ -485,7 +539,7 @@ app.post("/api/restore", (req, res) => {
   fs.mkdirSync(backupDir, { recursive: true });
   fs.writeFileSync(
     path.join(backupDir, `before-restore-${Date.now()}.json`),
-    JSON.stringify({ format: "cvos", version: 1, state: s.state }),
+    JSON.stringify({ format: "cvos", version: 2, state: s.state }),
     { mode: 0o600 },
   );
   res.json(saveState(input.state, revision));

@@ -64,7 +64,7 @@ export const knowledgeSchema = z.object({
     .max(30)
     .default([]),
 });
-const resume = z.object({
+export const resumeSchema = z.object({
   id: short,
   title: short,
   content: text,
@@ -73,6 +73,7 @@ const resume = z.object({
   photo,
   evidence,
   selectionNote: text.default(""),
+  gaps: text.default(""),
   versions: z
     .array(
       z.object({
@@ -99,7 +100,8 @@ export const stateSchema = z
         }),
       )
       .max(300),
-    resumes: z.array(resume).max(500),
+    resumes: z.array(resumeSchema).max(500),
+    resumeDrafts: z.array(resumeSchema).max(500).default([]),
     jobs: z
       .array(
         z.object({
@@ -146,6 +148,7 @@ export const stateSchema = z
     for (const key of [
       "knowledge",
       "resumes",
+      "resumeDrafts",
       "jobs",
       "sources",
       "chats",
@@ -154,12 +157,19 @@ export const stateSchema = z
       if (new Set(state[key].map((x) => x.id)).size !== state[key].length)
         ctx.addIssue({ code: "custom", message: "条目 ID 重复" });
     }
+    if (
+      new Set([...state.resumes, ...state.resumeDrafts].map((r) => r.id))
+        .size !==
+      state.resumes.length + state.resumeDrafts.length
+    )
+      ctx.addIssue({ code: "custom", message: "草稿与简历 ID 重复" });
   });
 export const emptyState = () => ({
   profile: emptyProfile(),
   knowledge: [],
   chats: [],
   resumes: [],
+  resumeDrafts: [],
   jobs: [],
   sources: [],
   proposals: [],
@@ -272,4 +282,24 @@ export function assertTextIntegrity(content, extracted) {
         { status: 503 },
       );
   }
+}
+
+export function migrateResumeDrafts(state, force = false) {
+  if (
+    !state ||
+    !Array.isArray(state.resumes) ||
+    !Array.isArray(state.jobs) ||
+    (state.resumeDrafts !== undefined && !Array.isArray(state.resumeDrafts))
+  )
+    throw Object.assign(new Error("备份资料格式不正确。"), { status: 400 });
+  if (!force && Object.hasOwn(state, "resumeDrafts")) return state;
+  const oldIds = new Set(state.resumes.map((r) => r.id));
+  return {
+    ...state,
+    resumes: [],
+    resumeDrafts: [...(state.resumeDrafts || []), ...state.resumes],
+    jobs: state.jobs.map((j) =>
+      oldIds.has(j.resumeId) ? { ...j, resumeId: "" } : j,
+    ),
+  };
 }

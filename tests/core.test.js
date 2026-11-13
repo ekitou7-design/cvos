@@ -107,7 +107,7 @@ test("local API: security, persistence, confirmation, import, DOCX, backup and r
     return { r, data: await r.json() };
   }
   try {
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < 600; i++) {
       try {
         if (!base) throw new Error("starting");
         const r = await fetch(base + "/api/session");
@@ -310,8 +310,47 @@ test("local API: security, persistence, confirmation, import, DOCX, backup and r
     r = await request("/api/ai/resume", { jobId: "job" });
     assert.equal(r.r.status, 200, JSON.stringify(r.data));
     d = r.data;
-    assert.ok(d.state.resumes[0].content.includes("Verified skill from mock"));
-    assert.equal(d.state.jobs[0].resumeId, r.data.resumeId);
+    assert.equal(d.state.resumes.length, 0);
+    const draft = d.state.resumeDrafts[0];
+    assert.equal(d.draftId, draft.id);
+    assert.ok(draft.content.includes("Verified skill from mock"));
+    assert.equal(d.state.jobs[0].resumeId, "");
+    const confirmationPath = "/api/resume-drafts/" + draft.id + "/confirm";
+    assert.equal(
+      (
+        await request(confirmationPath, {
+          revision: d.revision - 1,
+          resume: draft,
+        })
+      ).r.status,
+      409,
+    );
+    const edited = {
+      ...draft,
+      title: "Confirmed synthetic resume",
+      content: draft.content + "\n- User reviewed this statement",
+    };
+    const confirmed = await request(confirmationPath, {
+      revision: d.revision,
+      resume: edited,
+    });
+    assert.equal(confirmed.r.status, 200, JSON.stringify(confirmed.data));
+    d = confirmed.data;
+    assert.equal(d.state.resumeDrafts.length, 0);
+    assert.equal(d.state.resumes.length, 1);
+    assert.equal(d.state.resumes[0].content, edited.content);
+    assert.equal(d.state.resumes[0].versions[0].content, edited.content);
+    assert.equal(d.state.jobs[0].resumeId, draft.id);
+    assert.equal(
+      (
+        await request(confirmationPath, {
+          revision: d.revision,
+          resume: edited,
+        })
+      ).r.status,
+      409,
+    );
+    assert.equal((await request("/api/state")).data.state.resumes.length, 1);
     d.state.resumes = [
       {
         id: "r1",
@@ -378,6 +417,7 @@ test("local API: security, persistence, confirmation, import, DOCX, backup and r
     d = r.data;
     const backup = (await request("/api/backup")).data;
     assert.equal(backup.format, "cvos");
+    assert.equal(backup.version, 2);
     assert.ok(!JSON.stringify(backup).includes("fake-secret"));
     assert.ok(!JSON.stringify(backup).includes("secret"));
     assert.equal(

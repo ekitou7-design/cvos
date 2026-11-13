@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
-import { emptyState, stateSchema } from "./domain.js";
+import { emptyState, stateSchema, migrateResumeDrafts } from "./domain.js";
 import { migrateState } from "./knowledge.js";
 export const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -33,13 +33,24 @@ db.prepare("INSERT OR IGNORE INTO state VALUES(1,0,?)").run(
 // Migrate once in a transaction; keep an exact pre-migration backup outside Git.
 const stored = db.prepare("SELECT * FROM state WHERE id=1").get();
 const previous = JSON.parse(stored.body);
-if (!Object.hasOwn(previous, "knowledge")) {
-  const migrated = stateSchema.parse(migrateState(previous));
+const needsKnowledge = !Object.hasOwn(previous, "knowledge");
+const needsDrafts = !Object.hasOwn(previous, "resumeDrafts");
+if (needsKnowledge || needsDrafts) {
+  const migrated = stateSchema.parse(
+    migrateResumeDrafts(migrateState(previous)),
+  );
   const backupDir = path.join(dataDir, "backups");
   fs.mkdirSync(backupDir, { recursive: true });
   fs.writeFileSync(
-    path.join(backupDir, `before-v020-${Date.now()}.json`),
-    JSON.stringify({ format: "cvos", version: 1, state: previous }),
+    path.join(
+      backupDir,
+      `before-${needsKnowledge ? "v020" : "v021"}-${Date.now()}.json`,
+    ),
+    JSON.stringify({
+      format: "cvos",
+      version: needsDrafts ? 1 : 2,
+      state: previous,
+    }),
     { flag: "wx", mode: 0o600 },
   );
   db.prepare(

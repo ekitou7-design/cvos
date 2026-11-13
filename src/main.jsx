@@ -126,6 +126,7 @@ function App() {
     [busy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false),
     [resumeId, setResumeId] = useState(""),
+    [draftId, setDraftId] = useState(""),
     [chatId, setChatId] = useState(""),
     [editorEpoch, setEditorEpoch] = useState(0);
   const apply = (data) => {
@@ -177,11 +178,14 @@ function App() {
     return r;
   };
   const navigate = (next) => {
-    if (busy) return;
-    if (dirty && !confirm("有尚未保存的编辑，确认离开并放弃这些编辑？")) return;
+    if (busy) return false;
+    if (dirty && !confirm("有尚未保存的编辑，确认离开并放弃这些编辑？"))
+      return false;
     if (dirty) setEditorEpoch((n) => n + 1);
     setDirty(false);
+    if (next === "file") setResumeId("");
     setModule(next);
+    return true;
   };
   const safe = () => {
     if (!dirty) return true;
@@ -202,7 +206,8 @@ function App() {
     chat: ["AI 对话", "从一次对话，梳理你的下一步。"],
     profile: ["个人知识库", "每一段经历，都是你的独有资产。"],
     target: ["JD 定制", "让真实经历，与理想岗位相遇。"],
-    file: ["简历库", "为每一次机会，准备好自己。"],
+    file: ["简历库", "你确认保存的简历，随时继续编辑。"],
+    review: ["审核生成的简历", "检查并修改，确认后再保存到简历库。"],
   };
   return (
     <div className="app">
@@ -210,7 +215,7 @@ function App() {
         <div className="brand">
           <span className="brand-mark">C</span>
           <b>CVOS</b>
-          <span className="version">0.2.0</span>
+          <span className="version">0.2.1</span>
         </div>
         <div className="workspace-label">个人工作空间</div>
         <nav>
@@ -224,7 +229,11 @@ function App() {
               key={key}
               aria-label={label}
               title={label}
-              className={module === key ? "nav active" : "nav"}
+              className={
+                module === key || (module === "review" && key === "target")
+                  ? "nav active"
+                  : "nav"
+              }
               onClick={() => navigate(key)}
               disabled={busy}
             >
@@ -332,19 +341,49 @@ function App() {
               key={editorEpoch}
               {...{ state, save, run, apply, setDirty }}
               onResume={(r) => {
-                setResumeId(r);
-                navigate("file");
+                if (navigate("file")) setResumeId(r);
+              }}
+              onDraft={(r) => {
+                setDraftId(r);
+                setDirty(false);
+                setModule("review");
               }}
             />
           )}
           {module === "file" && (
             <Resumes
               key={editorEpoch}
-              {...{ state, save, run, setDirty, resumeId, setResumeId }}
+              {...{
+                state,
+                save,
+                run,
+                apply,
+                revision,
+                setDirty,
+                resumeId,
+                setResumeId,
+              }}
+              onCreate={() => navigate("target")}
+              onBack={() => setResumeId("")}
+            />
+          )}
+          {module === "review" && (
+            <Resumes
+              key={"draft-" + draftId + "-" + editorEpoch}
+              {...{ state, save, run, apply, revision, setDirty }}
+              isDraft
+              resumeId={draftId}
+              setResumeId={setDraftId}
+              onBack={() => setModule("target")}
+              onConfirmed={(r) => {
+                setDraftId("");
+                setResumeId(r);
+                setModule("file");
+              }}
             />
           )}
         </fieldset>
-        <footer>CVOS 0.2.0 · 知识沉淀于本地，简历因机会而生。</footer>
+        <footer>CVOS 0.2.1 · 知识沉淀于本地，简历因机会而生。</footer>
       </main>
       {showSettings && (
         <Settings
@@ -863,7 +902,7 @@ const blankJob = () => ({
   salary: "",
   requirements: "",
 });
-function Jobs({ state, save, run, apply, setDirty, onResume }) {
+function Jobs({ state, save, run, apply, setDirty, onResume, onDraft }) {
   const [job, setJob] = useState(null),
     [changed, setChanged] = useState(false);
   function select(j) {
@@ -927,6 +966,31 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
           <Icon name="plus" />
           添加目标岗位
         </button>
+        <div className="pending-drafts">
+          <h3>
+            待确认草稿{" "}
+            <span className="count">{state.resumeDrafts.length}</span>
+          </h3>
+          <p className="hint">生成结果暂存在这里，确认后才进入简历库。</p>
+          {state.resumeDrafts.map((d) => (
+            <button
+              className="draft-row"
+              key={d.id}
+              onClick={() => {
+                if (changed && !confirm("放弃未保存的岗位编辑并审核草稿？"))
+                  return;
+                setDirty(false);
+                onDraft(d.id);
+              }}
+            >
+              <b>继续审核：{d.title}</b>
+              <small>{new Date(d.updatedAt).toLocaleString("zh-CN")}</small>
+            </button>
+          ))}
+          {!state.resumeDrafts.length && (
+            <p className="muted">暂无待确认草稿</p>
+          )}
+        </div>
       </div>
       {job ? (
         <section className="card job-editor">
@@ -1095,11 +1159,11 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
                   const result = apply(
                     await api("/ai/resume", { jobId: job.id, mode: "local" }),
                   );
-                  onResume(result.resumeId);
-                }, "已从已确认知识中选取原文并校验一页 A4")
+                  onDraft(result.draftId);
+                }, "草稿已生成并校验一页 A4，请核对后确认入库")
               }
             >
-              本地生成单页简历
+              本地生成单页草稿
             </button>
             <button
               className="primary"
@@ -1111,12 +1175,12 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
               onClick={() =>
                 run(async () => {
                   const r = apply(await api("/ai/resume", { jobId: job.id }));
-                  if (r.gaps) alert("请核对以下资料缺口：\n" + r.gaps);
-                  onResume(r.resumeId);
-                }, "专属简历已生成，请核对内容")
+
+                  onDraft(r.draftId);
+                }, "草稿已生成，核对后再确认保存到简历库")
               }
             >
-              AI 定制单页简历 <Icon name="arrow" />
+              AI 定制单页草稿 <Icon name="arrow" />
             </button>
           </div>
         </section>
@@ -1130,9 +1194,22 @@ function Jobs({ state, save, run, apply, setDirty, onResume }) {
     </div>
   );
 }
-function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
-  const current =
-    state.resumes.find((r) => r.id === resumeId) || state.resumes[0];
+function Resumes({
+  state,
+  save,
+  run,
+  apply,
+  revision,
+  setDirty,
+  resumeId,
+  setResumeId,
+  isDraft = false,
+  onBack,
+  onCreate,
+  onConfirmed,
+}) {
+  const collection = isDraft ? "resumeDrafts" : "resumes";
+  const current = state[collection].find((r) => r.id === resumeId);
   const [content, setContent] = useState(current?.content || ""),
     [title, setTitle] = useState(current?.title || ""),
     [photo, setPhoto] = useState(current?.photo || ""),
@@ -1146,9 +1223,9 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
     setEvidence(current?.evidence || []);
     setChanged(false);
   }, [current?.id, current?.updatedAt]);
-  async function persist() {
+  async function persist(snapshotDraft = false) {
     if (!current) return;
-    if (!changed) return;
+    if (!changed && !(isDraft && snapshotDraft)) return;
     const date = now();
     const r = {
       ...current,
@@ -1157,14 +1234,17 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
       photo,
       evidence,
       updatedAt: date,
-      versions: [
-        ...current.versions,
-        { id: id(), content, photo, title, evidence, createdAt: date },
-      ],
+      versions:
+        !isDraft || snapshotDraft
+          ? [
+              ...current.versions,
+              { id: id(), content, photo, title, evidence, createdAt: date },
+            ]
+          : current.versions,
     };
     await save({
       ...state,
-      resumes: state.resumes.map((x) => (x.id === r.id ? r : x)),
+      [collection]: state[collection].map((x) => (x.id === r.id ? r : x)),
     });
     setChanged(false);
   }
@@ -1172,6 +1252,7 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
     if (changed && !confirm("放弃未保存的简历编辑？")) return;
     setDirty(false);
     setChanged(false);
+    setHistory(false);
     setResumeId(r.id);
   };
   async function downloadResume(id, format) {
@@ -1185,100 +1266,165 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  function leave() {
+    if (changed && !confirm("有尚未保存的编辑，确认放弃这些编辑并返回？"))
+      return;
+    setDirty(false);
+    onBack();
+  }
+  if (!current) {
+    if (isDraft)
+      return (
+        <section className="card">
+          <Empty title="草稿已处理或不存在">返回 JD 定制继续操作。</Empty>
+          <button className="secondary" onClick={onBack}>
+            返回 JD 定制
+          </button>
+        </section>
+      );
+    return (
+      <section className="card resume-library">
+        <div className="card-heading">
+          <div>
+            <h2>
+              已确认保存的简历{" "}
+              <span className="count">{state.resumes.length}</span>
+            </h2>
+            <p>这里保留你审核后确认保存的简历，打开即可继续编辑。</p>
+          </div>
+          <button className="primary" onClick={onCreate}>
+            按 JD 创建简历
+          </button>
+        </div>
+        <div className="resume-cards">
+          {[...state.resumes]
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .map((r) => {
+              const job = state.jobs.find((j) => j.id === r.jobId);
+              return (
+                <button
+                  className="resume-card"
+                  key={r.id}
+                  onClick={() => select(r)}
+                  aria-label={"编辑简历 " + r.title}
+                >
+                  {r.photo && <img src={r.photo} alt="" />}
+                  <div>
+                    <h3>{r.title}</h3>
+                    <p>
+                      {job
+                        ? [job.company, job.title].filter(Boolean).join(" · ")
+                        : r.jobId
+                          ? "关联岗位已删除"
+                          : "未关联岗位"}
+                    </p>
+                    <small>
+                      更新于 {new Date(r.updatedAt).toLocaleString("zh-CN")}
+                      <br />
+                      {r.versions.length} 个版本
+                    </small>
+                    <span className="button-link">打开编辑 →</span>
+                  </div>
+                </button>
+              );
+            })}
+        </div>
+        {!state.resumes.length && (
+          <Empty title="还没有确认保存的简历">
+            先根据 JD 生成草稿，核对并确认保存后，就会显示在这里。
+          </Empty>
+        )}
+      </section>
+    );
+  }
   return (
     <div>
+      {isDraft && (
+        <section className="card draft-notice">
+          <h2>待确认草稿</h2>
+          <p>
+            这份简历尚未进入简历库。你可以修改正文和照片，满意后点击“确认保存到简历库”。
+          </p>
+          {current.gaps && (
+            <details open>
+              <summary>需核对的资料缺口</summary>
+              <p className="gap-text">{current.gaps}</p>
+            </details>
+          )}
+        </section>
+      )}
       <div className="resume-toolbar">
-        <select
-          aria-label="选择简历"
-          value={current?.id || ""}
-          onChange={(e) =>
-            select(state.resumes.find((r) => r.id === e.target.value))
-          }
-        >
-          <option value="" disabled>
-            选择一份简历
-          </option>
-          {state.resumes.map((r) => (
-            <option value={r.id} key={r.id}>
-              {r.title}
-            </option>
-          ))}
-        </select>
-        <button
-          className="secondary"
-          onClick={() =>
-            run(async () => {
-              if (changed && !confirm("放弃当前未保存的简历编辑？")) return;
-              const r = {
-                id: id(),
-                title: "我的简历",
-                content:
-                  "# " +
-                  (state.profile.name || "姓名") +
-                  "\n" +
-                  [
-                    state.profile.headline,
-                    state.profile.email,
-                    state.profile.phone,
-                    state.profile.location,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") +
-                  "\n" +
-                  state.knowledge
-                    .filter((e) => e.confirmed && e.content.trim())
-                    .map((e) => "## " + e.title + "\n" + e.content)
-                    .join("\n"),
-                jobId: "",
-                updatedAt: now(),
-                versions: [],
-              };
-              r.versions = [
-                { id: id(), content: r.content, createdAt: r.updatedAt },
-              ];
-              await save({ ...state, resumes: [r, ...state.resumes] });
-              setResumeId(r.id);
-            })
-          }
-        >
-          <Icon name="plus" />
-          新建简历
+        <button className="secondary" onClick={leave}>
+          {isDraft ? "返回 JD 定制" : "返回简历库"}
         </button>
         {current && (
           <>
-            <button className="secondary" onClick={() => setHistory(!history)}>
-              历史版本 · {current.versions.length}
-            </button>
-            <button
-              className="secondary"
-              onClick={() =>
-                run(async () => {
-                  await persist();
-                  await downloadResume(current.id, "docx");
-                })
-              }
-            >
-              <Icon name="download" />
-              Word
-            </button>
-            <button
-              className="secondary"
-              onClick={() =>
-                run(async () => {
-                  await persist();
-                  await downloadResume(current.id, "pdf");
-                })
-              }
-            >
-              PDF
-            </button>
+            {(!isDraft || current.versions.length > 0) && (
+              <button
+                className="secondary"
+                onClick={() => setHistory(!history)}
+              >
+                {isDraft ? "草稿记录" : "历史版本"} · {current.versions.length}
+              </button>
+            )}
+            {!isDraft && (
+              <>
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    run(async () => {
+                      await persist();
+                      await downloadResume(current.id, "docx");
+                    })
+                  }
+                >
+                  <Icon name="download" />
+                  Word
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    run(async () => {
+                      await persist();
+                      await downloadResume(current.id, "pdf");
+                    })
+                  }
+                >
+                  PDF
+                </button>
+              </>
+            )}
             <button
               className="primary"
               disabled={!changed}
-              onClick={() => run(persist, "已保存新版本")}
+              onClick={() =>
+                run(persist, isDraft ? "草稿已保存，尚未入库" : "已保存新版本")
+              }
             >
-              保存版本{changed ? " ·" : ""}
+              {isDraft ? "保存草稿" : "保存版本"}
+              {changed ? " ·" : ""}
             </button>
+            {isDraft && (
+              <button
+                className="primary"
+                disabled={!title.trim() || !content.trim()}
+                onClick={() =>
+                  run(async () => {
+                    const result = apply(
+                      await api("/resume-drafts/" + current.id + "/confirm", {
+                        revision,
+                        resume: { title, content, photo, evidence },
+                      }),
+                    );
+                    setDirty(false);
+                    setChanged(false);
+                    onConfirmed(result.resumeId);
+                  }, "已确认保存到简历库")
+                }
+              >
+                确认保存到简历库
+              </button>
+            )}
           </>
         )}
       </div>
@@ -1312,7 +1458,7 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
         <div className="resume-layout">
           <section className="card resume-editor">
             <div className="card-heading">
-              <h2>简历内容</h2>
+              <h2>{isDraft ? "草稿内容" : "简历内容"}</h2>
               <span className="muted">
                 {changed ? "尚未保存" : "已保存至本机"}
               </span>
@@ -1349,7 +1495,7 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
               disabled={!content.trim()}
               onClick={() =>
                 run(async () => {
-                  await persist();
+                  await persist(true);
                   const result = await api("/compact", {
                     content,
                     photo,
@@ -1397,20 +1543,29 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
             <button
               className="text-button danger"
               onClick={() => {
-                if (confirm("删除此简历及全部历史版本？"))
+                if (
+                  confirm(
+                    isDraft
+                      ? "放弃这份草稿？已确认保存的简历不会改变。"
+                      : "删除此简历及全部历史版本？",
+                  )
+                )
                   run(async () => {
                     await save({
                       ...state,
-                      resumes: state.resumes.filter((r) => r.id !== current.id),
+                      [collection]: state[collection].filter(
+                        (r) => r.id !== current.id,
+                      ),
                       jobs: state.jobs.map((j) =>
                         j.resumeId === current.id ? { ...j, resumeId: "" } : j,
                       ),
                     });
                     setResumeId("");
+                    if (isDraft) onBack();
                   });
               }}
             >
-              删除简历
+              {isDraft ? "放弃草稿" : "删除简历"}
             </button>
           </section>
           <React.Suspense fallback={<p>正在加载 A4 预览…</p>}>
@@ -1420,7 +1575,7 @@ function Resumes({ state, save, run, setDirty, resumeId, setResumeId }) {
       ) : (
         <div className="card">
           <Empty title="你的专属简历，将汇聚在这里">
-            从资料库新建一份简历，或前往 JD 定制生成。
+            前往 JD 定制生成草稿，核对后保存到这里。
           </Empty>
         </div>
       )}
@@ -1662,9 +1817,14 @@ function Settings({
                   const f = e.target.files[0];
                   if (f)
                     run(async () => {
-                      if (f.size > 18000000) throw new Error("备份文件过大");
+                      if (f.size > 128 * 1024 * 1024)
+                        throw new Error("备份文件过大");
                       const b = JSON.parse(await f.text());
-                      if (b.format !== "cvos" || b.version !== 1 || !b.state)
+                      if (
+                        b.format !== "cvos" ||
+                        ![1, 2].includes(b.version) ||
+                        !b.state
+                      )
                         throw new Error("不是支持的 CVOS 备份文件");
                       setRestore(b);
                     });
@@ -1679,10 +1839,23 @@ function Settings({
               <p>
                 包含 {restore.state.knowledge?.length || 0} 条知识（含附件）、
                 {restore.state.chats?.length || 0} 段对话、
-                {restore.state.resumes?.length || 0} 份简历、
+                {restore.version === 2
+                  ? restore.state.resumes?.length || 0
+                  : 0}{" "}
+                份已保存简历、
+                {(restore.state.resumeDrafts?.length || 0) +
+                  (restore.version === 1
+                    ? restore.state.resumes?.length || 0
+                    : 0)}{" "}
+                份待确认草稿、
                 {restore.state.jobs?.length || 0}{" "}
                 个岗位。将替换当前数据；恢复前会在本地自动保存副本。模型密钥保持当前设置。
               </p>
+              {restore.version === 1 && (
+                <p className="hint">
+                  旧备份中的简历将恢复为待确认草稿，核对后再保存到简历库。
+                </p>
+              )}
               <div className="actions">
                 <button className="secondary" onClick={() => setRestore(null)}>
                   取消

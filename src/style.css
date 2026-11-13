@@ -1520,3 +1520,85 @@ summary:focus-visible {
     gap: 14px;
   }
 }
+
+.pending-drafts {
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid #e6e9ef;
+}
+.draft-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px 10px;
+  width: 100%;
+  text-align: left;
+  border-radius: 8px;
+  border: 1px solid #e6e9ef;
+  margin-bottom: 10px;
+  overflow-wrap: anywhere;
+}
+.draft-row small {
+  color: #8a94a5;
+}
+.draft-row:hover,
+.resume-card:hover {
+  background: #f3f7fd;
+  border-color: #b8cdeb;
+}
+.draft-notice {
+  margin-bottom: 20px;
+  border-color: #cddff7;
+  background: #f5f9ff;
+}
+.draft-notice p {
+  margin-bottom: 8px;
+}
+.gap-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.resume-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+}
+.resume-card {
+  border: 1px solid #e2e6ef;
+  border-radius: 12px;
+  padding: 22px;
+  display: flex;
+  gap: 16px;
+  text-align: left;
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+.resume-card img {
+  width: 48px;
+  height: 64px;
+  object-fit: cover;
+}
+.resume-card h3 {
+  margin-bottom: 10px;
+}
+.resume-card p {
+  color: #69758a;
+  font-size: 12px;
+}
+.resume-card small {
+  display: block;
+  color: #929aaa;
+}
+.resume-card .button-link {
+  display: block;
+  margin-top: 18px;
+}
+@media (max-width: 640px) {
+  .resume-cards {
+    grid-template-columns: 1fr;
+  }
+  .resume-library .card-heading {
+    flex-wrap: wrap;
+    gap: 15px;
+  }
+}
