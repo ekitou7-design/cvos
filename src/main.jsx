@@ -204,7 +204,7 @@ function App() {
   const pending = state.proposals.filter((p) => p.status === "pending").length;
   const titles = {
     chat: ["AI 对话", "从一次对话，梳理你的下一步。"],
-    profile: ["个人知识库", "每一段经历，都是你的独有资产。"],
+    profile: ["个人知识库", "收集资料，连接想法，建立自己的知识网络。"],
     target: ["JD 定制", "让真实经历，与理想岗位相遇。"],
     file: ["简历库", "你确认保存的简历，随时继续编辑。"],
     review: ["审核生成的简历", "检查并修改，确认后再保存到简历库。"],

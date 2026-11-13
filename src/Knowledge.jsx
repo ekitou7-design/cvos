@@ -1,4 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import {
+  PAGE_SIZE,
+  queryKnowledge,
+  removeKnowledge,
+} from "./knowledge-view.js";
 const date = () => new Date().toISOString();
 const blank = () => ({
   id: crypto.randomUUID(),
@@ -24,10 +29,58 @@ export function Knowledge({ state, save, run, setDirty }) {
   const [entry, setEntry] = useState(null),
     [changed, setChanged] = useState(false),
     [query, setQuery] = useState(""),
-    [category, setCategory] = useState("全部"),
+    [category, setCategory] = useState(""),
+    [tag, setTag] = useState(""),
+    [status, setStatus] = useState(""),
+    [sort, setSort] = useState("updated-desc"),
+    [layout, setLayout] = useState(() => {
+      try {
+        const saved = localStorage.getItem("cvos-knowledge-view");
+        return ["table", "cards", "list"].includes(saved) ? saved : "table";
+      } catch {
+        return "table";
+      }
+    }),
+    [page, setPage] = useState(0),
+    [selected, setSelected] = useState([]),
+    [bulkCategory, setBulkCategory] = useState(""),
+    [bulkTag, setBulkTag] = useState(""),
+    [linkQuery, setLinkQuery] = useState(""),
+    [editorNotice, setEditorNotice] = useState(""),
     [view, setView] = useState(false),
     [tagText, setTagText] = useState("");
   const entries = state.knowledge || [];
+  const dialog = useRef(null);
+  const opener = useRef(null);
+  const editing = Boolean(entry);
+  useEffect(() => {
+    if (!editing) {
+      opener.current?.focus();
+      return;
+    }
+    dialog.current.showModal();
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = overflow;
+    };
+  }, [editing]);
+  useEffect(() => {
+    setPage(0);
+    setSelected([]);
+  }, [query, category, tag, status, sort]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("cvos-knowledge-view", layout);
+    } catch {}
+  }, [layout]);
+  function close() {
+    if (dialog.current?.closest("fieldset[disabled]")) return;
+    if (changed && !confirm("放弃这条知识的未保存修改？")) return;
+    setEntry(null);
+    setChanged(false);
+    setDirty(false);
+  }
   useEffect(() => {
     const saved = entries.find((e) => e.id === entry?.id);
     if (saved && !changed) {
@@ -37,17 +90,23 @@ export function Knowledge({ state, save, run, setDirty }) {
   }, [entries]);
   const categories = [
     ...new Set([
+      "笔记",
+      "阅读摘录",
+      "研究资料",
+      "灵感收藏",
+      "项目",
       "教育经历",
       "工作 / 实习",
-      "项目",
       "技能",
       "成果",
-      "笔记",
       ...entries.map((e) => e.category),
     ]),
   ];
   function select(e) {
     if (changed && !confirm("放弃这条知识的未保存修改？")) return;
+    if (!entry) opener.current = document.activeElement;
+    setEditorNotice("");
+    setLinkQuery("");
     setEntry(structuredClone(e));
     setTagText(e.tags.join(", "));
     setChanged(false);
@@ -56,6 +115,7 @@ export function Knowledge({ state, save, run, setDirty }) {
   }
   function change(patch) {
     setEntry((e) => ({ ...e, ...patch }));
+    setEditorNotice("");
     setChanged(true);
     setDirty(true);
   }
@@ -76,6 +136,8 @@ export function Knowledge({ state, save, run, setDirty }) {
     });
     setEntry(updated);
     setChanged(false);
+    setDirty(false);
+    setEditorNotice("已保存");
   }
   function download(a) {
     const bytes = Uint8Array.from(atob(a.base64), (c) => c.charCodeAt(0));
@@ -88,90 +150,458 @@ export function Knowledge({ state, save, run, setDirty }) {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  const filtered = entries.filter(
-    (e) =>
-      (category === "全部" || e.category === category) &&
-      `${e.title} ${e.category} ${e.tags.join(" ")} ${e.content} ${e.attachments.map((a) => a.name).join(" ")}`
-        .toLowerCase()
-        .includes(query.toLowerCase()),
+  const filtered = queryKnowledge(entries, {
+    query,
+    category,
+    tag,
+    status,
+    sort,
+  });
+  const pageIndex = Math.min(
+    page,
+    Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1),
+  );
+  const visible = filtered.slice(
+    pageIndex * PAGE_SIZE,
+    (pageIndex + 1) * PAGE_SIZE,
+  );
+  const tags = [...new Set(entries.flatMap((e) => e.tags))].sort((a, b) =>
+    a.localeCompare(b, "zh-CN"),
+  );
+  const toggle = (id) =>
+    setSelected((ids) =>
+      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
+    );
+  async function bulk(action) {
+    if (
+      action === "delete" &&
+      !confirm(
+        `删除选中的 ${selected.length} 条知识及其附件？已生成简历的历史内容仍保留。`,
+      )
+    )
+      return;
+    await save({
+      ...state,
+      knowledge:
+        action === "delete"
+          ? removeKnowledge(entries, selected)
+          : entries.map((e) => {
+              if (!selected.includes(e.id)) return e;
+              return {
+                ...e,
+                updatedAt: date(),
+                ...(action === "category"
+                  ? { category: bulkCategory.trim() }
+                  : { tags: [...new Set([...e.tags, ...split(bulkTag)])] }),
+              };
+            }),
+    });
+    setSelected([]);
+    setBulkCategory("");
+    setBulkTag("");
+  }
+  const stamp = (value) =>
+    value && !Number.isNaN(Date.parse(value))
+      ? new Date(value).toLocaleDateString("zh-CN")
+      : "—";
+  const chips = (e) => (
+    <span className="kb-tags">
+      {e.tags.slice(0, 3).map((t) => (
+        <span key={t} title={t}>
+          {t}
+        </span>
+      ))}
+      {e.tags.length > 3 && <small>+{e.tags.length - 3}</small>}
+    </span>
+  );
+  const check = (e) => (
+    <input
+      type="checkbox"
+      aria-label={`选择 ${e.title}`}
+      checked={selected.includes(e.id)}
+      onChange={() => toggle(e.id)}
+    />
   );
   return (
-    <div className="knowledge-layout">
-      <aside className="card knowledge-list">
-        <div className="card-heading">
-          <h2>
-            我的知识库 <span className="count">{entries.length}</span>
-          </h2>
+    <div className="knowledge-database">
+      <section className="card kb-database" aria-label="知识数据库">
+        <div className="kb-heading">
+          <div>
+            <h2>
+              全部资料 <span className="count">{entries.length}</span>
+            </h2>
+            <p className="muted">收藏、阅读、思考，在这里持续积累。</p>
+          </div>
           <button className="primary" onClick={() => select(blank())}>
-            新建条目
+            ＋ 新建条目
           </button>
         </div>
-        <input
-          aria-label="搜索知识库"
-          placeholder="搜索正文、标签、附件…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <select
-          aria-label="知识分类筛选"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        >
-          {["全部", ...categories].map((c) => (
-            <option key={c}>{c}</option>
-          ))}
-        </select>
-        <p className="hint">
-          {entries.filter((e) => e.confirmed).length} 条已确认 ·
-          仅已确认正文用于定制简历
-        </p>
-        <div className="knowledge-rows">
-          {filtered.map((e) => (
-            <button
-              key={e.id}
-              className={
-                "knowledge-row " + (entry?.id === e.id ? "selected" : "")
-              }
-              onClick={() => select(e)}
-            >
-              <small>
-                {e.category} · {e.confirmed ? "已确认" : "草稿"}
-              </small>
-              <b>{e.title}</b>
-              <span>{e.content.slice(0, 72) || "暂无正文"}</span>
-              <small>
-                {e.tags.map((t) => "#" + t).join(" ")}
-                {e.attachments.length
-                  ? ` · ${e.attachments.length} 个附件`
-                  : ""}
-              </small>
-            </button>
-          ))}
+        <div className="kb-viewbar">
+          <div className="kb-views" role="group" aria-label="数据库视图">
+            {[
+              ["table", "表格"],
+              ["cards", "卡片"],
+              ["list", "列表"],
+            ].map(([key, name]) => (
+              <button
+                key={key}
+                aria-pressed={layout === key}
+                className={layout === key ? "active" : ""}
+                onClick={() => setLayout(key)}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+          <input
+            aria-label="搜索知识库"
+            placeholder="搜索标题、正文、标签、附件…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
         </div>
-        {!filtered.length && (
-          <p className="muted">
-            还没有匹配的条目。记录一个项目、一次实习，或今天的新想法。
-          </p>
+        <div className="kb-filters">
+          <label>
+            分类
+            <select
+              aria-label="知识分类筛选"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            >
+              <option value="">全部分类</option>
+              {categories.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            标签
+            <select
+              aria-label="知识标签筛选"
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+            >
+              <option value="">全部标签</option>
+              {tags.map((t) => (
+                <option key={t}>{t}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            状态
+            <select
+              aria-label="知识状态筛选"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            >
+              <option value="">全部状态</option>
+              <option value="draft">未确认</option>
+              <option value="confirmed">已确认</option>
+            </select>
+          </label>
+          <label className="kb-sort">
+            排序
+            <select
+              aria-label="知识排序"
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+            >
+              <option value="updated-desc">最近修改</option>
+              <option value="updated-asc">最早修改</option>
+              <option value="created-desc">最近创建</option>
+              <option value="created-asc">最早创建</option>
+              <option value="title-asc">标题 A → Z</option>
+              <option value="title-desc">标题 Z → A</option>
+            </select>
+          </label>
+          {(query || category || tag || status) && (
+            <button
+              className="text-button"
+              onClick={() => {
+                setQuery("");
+                setCategory("");
+                setTag("");
+                setStatus("");
+              }}
+            >
+              清除筛选
+            </button>
+          )}
+        </div>
+        {selected.length > 0 && (
+          <div className="kb-bulk" aria-label="批量操作">
+            <b>已选 {selected.length} 条</b>
+            <button className="text-button" onClick={() => setSelected([])}>
+              取消选择
+            </button>
+            <input
+              aria-label="批量分类"
+              list="bulk-categories"
+              placeholder="设置分类"
+              maxLength={500}
+              value={bulkCategory}
+              onChange={(e) => setBulkCategory(e.target.value)}
+            />
+            <datalist id="bulk-categories">
+              {categories.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </datalist>
+            <button
+              className="secondary"
+              disabled={!bulkCategory.trim()}
+              onClick={() => run(() => bulk("category"), "已批量归类")}
+            >
+              应用分类
+            </button>
+            <input
+              aria-label="批量标签"
+              placeholder="添加标签，逗号分隔"
+              value={bulkTag}
+              onChange={(e) => setBulkTag(e.target.value)}
+            />
+            <button
+              className="secondary"
+              disabled={!split(bulkTag).length}
+              onClick={() => run(() => bulk("tags"), "已添加标签")}
+            >
+              添加标签
+            </button>
+            <button
+              className="text-button danger"
+              onClick={() => run(() => bulk("delete"))}
+            >
+              删除所选
+            </button>
+          </div>
         )}
-      </aside>
-      <section className="card knowledge-editor">
-        {entry ? (
-          <>
-            <div className="card-heading">
-              <div>
-                <h2>{entry.title || "新的知识条目"}</h2>
-                <p>{changed ? "尚未保存" : "自由记录，长期积累"}</p>
-              </div>
+        <div className="kb-resultbar">
+          <label className="check-label">
+            <input
+              type="checkbox"
+              aria-label="选择本页全部条目"
+              checked={
+                visible.length > 0 &&
+                visible.every((e) => selected.includes(e.id))
+              }
+              ref={(el) => {
+                if (el)
+                  el.indeterminate =
+                    visible.some((e) => selected.includes(e.id)) &&
+                    !visible.every((e) => selected.includes(e.id));
+              }}
+              onChange={(event) =>
+                setSelected(
+                  event.target.checked
+                    ? [...new Set([...selected, ...visible.map((e) => e.id)])]
+                    : selected.filter(
+                        (id) => !visible.some((e) => e.id === id),
+                      ),
+                )
+              }
+            />
+            选择本页
+          </label>
+          <span role="status">
+            {filtered.length} 条结果 · 共 {entries.length} 条
+          </span>
+        </div>
+        {filtered.length > 0 ? (
+          layout === "table" ? (
+            <div className="kb-table-scroll">
+              <table className="kb-table">
+                <thead>
+                  <tr>
+                    <th aria-label="选择" />
+                    <th scope="col">名称</th>
+                    <th scope="col">分类</th>
+                    <th scope="col">标签</th>
+                    <th scope="col">状态</th>
+                    <th scope="col">附件 / 关联</th>
+                    <th scope="col">修改日期</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((e) => (
+                    <tr
+                      key={e.id}
+                      className={selected.includes(e.id) ? "selected" : ""}
+                    >
+                      <td>{check(e)}</td>
+                      <th scope="row">
+                        <button
+                          className="kb-title"
+                          onClick={() => select(e)}
+                          title={e.title}
+                        >
+                          ▤ <span>{e.title}</span>
+                        </button>
+                      </th>
+                      <td>
+                        <span className="kb-category">
+                          {e.category || "未分类"}
+                        </span>
+                      </td>
+                      <td>{chips(e)}</td>
+                      <td>
+                        <span
+                          className={
+                            "kb-status " + (e.confirmed ? "confirmed" : "")
+                          }
+                        >
+                          {e.confirmed ? "已确认" : "未确认"}
+                        </span>
+                      </td>
+                      <td className="kb-meta">
+                        {e.attachments.length} 附件 · {e.links.length} 关联
+                      </td>
+                      <td className="kb-meta">{stamp(e.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className={layout === "cards" ? "kb-cards" : "kb-list"}>
+              {visible.map((e) => (
+                <article
+                  key={e.id}
+                  className={
+                    "kb-item " + (selected.includes(e.id) ? "selected" : "")
+                  }
+                >
+                  <div className="kb-item-top">
+                    {check(e)}
+                    <span className="kb-category">
+                      {e.category || "未分类"}
+                    </span>
+                    <span
+                      className={
+                        "kb-status " + (e.confirmed ? "confirmed" : "")
+                      }
+                    >
+                      {e.confirmed ? "已确认" : "未确认"}
+                    </span>
+                  </div>
+                  <button
+                    className="kb-title"
+                    onClick={() => select(e)}
+                    title={e.title}
+                  >
+                    <span>{e.title}</span>
+                  </button>
+                  {chips(e)}
+                  <div className="kb-meta">
+                    {e.attachments.length} 附件 · {e.links.length} 关联 ·{" "}
+                    {stamp(e.updatedAt)}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )
+        ) : (
+          <div className="empty">
+            <h3>{entries.length ? "没有匹配的资料" : "从一条记录开始"}</h3>
+            <p>
+              {entries.length
+                ? "试试其他关键词，或清除筛选。"
+                : "阅读摘录、研究资料、灵感、日常笔记，都可以放在这里。"}
+            </p>
+            <button
+              className="secondary"
+              onClick={() =>
+                entries.length
+                  ? (setQuery(""), setCategory(""), setTag(""), setStatus(""))
+                  : select(blank())
+              }
+            >
+              {entries.length ? "清除筛选" : "新建条目"}
+            </button>
+          </div>
+        )}
+        <div className="kb-footer">
+          <span>
+            {filtered.length
+              ? `${pageIndex * PAGE_SIZE + 1}–${Math.min((pageIndex + 1) * PAGE_SIZE, filtered.length)}`
+              : 0}{" "}
+            / {filtered.length} 条 · 每页 {PAGE_SIZE} 条
+          </span>
+          <div className="actions">
+            <button
+              className="secondary"
+              disabled={pageIndex === 0}
+              onClick={() => setPage(pageIndex - 1)}
+            >
+              上一页
+            </button>
+            <span>
+              {pageIndex + 1} /{" "}
+              {Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))}
+            </span>
+            <button
+              className="secondary"
+              disabled={(pageIndex + 1) * PAGE_SIZE >= filtered.length}
+              onClick={() => setPage(pageIndex + 1)}
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </section>
+      <p className="hint">
+        {entries.filter((e) => e.confirmed).length} 条已确认可用于简历 ·
+        其他资料自由积累，正文与附件仅存本地
+      </p>
+      {entry && (
+        <dialog
+          className="knowledge-editor"
+          ref={dialog}
+          aria-labelledby="knowledge-editor-title"
+          onCancel={(event) => {
+            event.preventDefault();
+            close();
+          }}
+        >
+          <header className="kb-editor-heading">
+            <div>
+              <span className="eyebrow">知识条目</span>
+              <h2 id="knowledge-editor-title">
+                {entry.title || "新的知识条目"}
+              </h2>
+              <p role="status">{changed ? "尚未保存" : "自由记录，长期积累"}</p>
+            </div>
+            <div className="actions">
+              <button className="secondary" onClick={close}>
+                关闭
+              </button>
               <button
                 className="primary"
-                onClick={() => run(persist, "知识条目已保存")}
+                onClick={() =>
+                  run(async () => {
+                    try {
+                      await persist();
+                    } catch (error) {
+                      setEditorNotice(error.message);
+                      throw error;
+                    }
+                  }, "知识条目已保存")
+                }
               >
                 保存条目
               </button>
             </div>
+          </header>
+          <div className="kb-editor-body">
+            {editorNotice && (
+              <p role="status" className="hint">
+                {editorNotice}
+              </p>
+            )}
             <label className="field">
               <span>标题</span>
               <input
+                autoFocus
+                maxLength={500}
                 value={entry.title}
                 onChange={(e) => change({ title: e.target.value })}
               />
@@ -180,6 +610,7 @@ export function Knowledge({ state, save, run, setDirty }) {
               <label className="field">
                 <span>分类 · 可自定义</span>
                 <input
+                  maxLength={500}
                   list="knowledge-categories"
                   value={entry.category}
                   onChange={(e) => change({ category: e.target.value })}
@@ -251,16 +682,30 @@ export function Knowledge({ state, save, run, setDirty }) {
                   value={entry.content}
                   onChange={(e) => change({ content: e.target.value })}
                   placeholder={
-                    "不必按简历格式写。可以记录背景、过程、具体行动、结果和反思。\n将可独立使用的事实分行记录，便于定制时选择。"
+                    "记录摘录、想法、过程与反思…\n使用 # 标题组织笔记，使用 [[知识标题]] 关联其他资料。"
                   }
                 />
               </label>
             )}
             <details>
-              <summary>关联知识与反向链接</summary>
+              <summary>
+                关联知识与反向链接 · {entry.links.length} 条关联
+              </summary>
+              <input
+                aria-label="查找关联知识"
+                placeholder="按标题查找资料…"
+                value={linkQuery}
+                onChange={(e) => setLinkQuery(e.target.value)}
+              />
               <div className="source-select">
                 {entries
-                  .filter((e) => e.id !== entry.id)
+                  .filter(
+                    (e) =>
+                      e.id !== entry.id &&
+                      e.title
+                        .toLowerCase()
+                        .includes(linkQuery.trim().toLowerCase()),
+                  )
                   .map((e) => (
                     <label key={e.id}>
                       <input
@@ -368,39 +813,23 @@ export function Knowledge({ state, save, run, setDirty }) {
                   run(async () => {
                     await save({
                       ...state,
-                      knowledge: entries
-                        .filter((e) => e.id !== entry.id)
-                        .map((e) => ({
-                          ...e,
-                          links: e.links.filter((k) => k !== entry.id),
-                        })),
+                      knowledge: removeKnowledge(entries, [entry.id]),
                     });
                     setEntry(null);
                     setChanged(false);
+                    setDirty(false);
                   });
               }}
             >
               删除条目
             </button>
-          </>
-        ) : (
-          <div className="knowledge-welcome">
-            <span className="eyebrow">YOUR KNOWLEDGE, YOUR CAREER</span>
-            <h2>经历先积累，简历再生成。</h2>
-            <p>
-              项目、技能、成果、反思，都有自己的位置。
-              <br />
-              在左侧选一条知识，或从一段自由记录开始。
-            </p>
-            <button className="primary" onClick={() => select(blank())}>
-              记录一条知识
-            </button>
           </div>
-        )}
-      </section>
+        </dialog>
+      )}
     </div>
   );
 }
+
 export function PhotoEditor({ photo, onChange, run }) {
   const [image, setImage] = useState(null),
     [zoom, setZoom] = useState(1),
